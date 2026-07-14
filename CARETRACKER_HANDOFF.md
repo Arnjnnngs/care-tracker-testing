@@ -2,7 +2,7 @@
 
 > **THIS IS THE STAGING VARIANT.** Differences from production: `TEST_MODE = true` in index.html (test collection `caretracker_test_entries`, push/local notifications disabled, orange TESTING banner), sw.js cache `caretracker-testing-vN`, manifest renamed. Features under test here that are NOT yet in production: chemo cycle system (chemo_date records, Dexamethasone chemoOnly med, Zofran chemo-day block, chemo banners). Promote by copying files to the care-tracker repo with TEST_MODE=false and a prod cache bump.
 
-> **Purpose:** Complete context for an AI assistant (Fable or any Cowork model) to understand, maintain, and extend the CareTracker project without prior knowledge.
+> **Purpose:** Complete context for any AI assistant to understand, maintain, and extend the CareTracker project without prior knowledge.
 >
 > **Last updated:** July 11, 2026  
 > **Current version:** v27
