@@ -1,159 +1,165 @@
 # ⚠️ CareTracker TESTING
 
-**This is the staging/testing app.** Changes are built and tested here before being promoted to the real app at https://arnjnnngs.github.io/care-tracker/. It writes to a separate test database collection (`caretracker_test_entries`) — nothing here touches Brandi's real med history. Push notifications are disabled.
+**This is the staging/testing app.** Changes are built and tested here before being promoted to the
+real app at https://arnjnnngs.github.io/care-tracker/. It writes to a separate test database
+collection (`caretracker_test_entries`) — nothing here touches Brandi's real med history. Push
+notifications are disabled (`TEST_MODE = true` short-circuits `subscribePush()` and
+`checkNotifications()`).
+
+**Governance:** see `CLAUDE.md` for the standing rules any contributor (human or AI) must follow in
+this repo — most importantly: never point this app at the real `caretracker_entries` collection, and
+never push here (or to prod) without asking first.
 
 ---
+
+## Versioning (matches production, offset ahead)
+
+This repo's version number is **`(current live production version) + 1`** while testing carries
+features prod doesn't have yet — not an independent "t1, t2..." counter. Example: production is
+live at v27, so this repo is v28; the next round of testing changes becomes v29; and so on until
+those features are promoted to prod and prod's version catches up, at which point testing goes back
+to being exactly one ahead.
+
+Always check the **actual pushed** `care-tracker` repo (not a local/unpushed copy) for its real
+current version before assigning the next testing version number.
 
 ## Testing Version History (this repo)
 
-| Test version | Date | Based on prod | Changes under test | Status |
+| Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
-| t1 | Jul 13, 2026 | v27 | Chemo cycle: chemo date scheduling, Dexamethasone auto-appearing med (2 tablets, 8 AM & 2 PM, day before chemo through day after, missed-dose alerts), Zofran locked on chemo days 1–2 with override, phased red chemo banners (day −2 through +1) | Testing |
+| v29 | Jul 14, 2026 | v28 | Menstrual cycle tracking (Period Start/End one-tap logging, no time picker, "Day N since last period" counter, Active badge — on the Weight tab). In-Patient day tracking (one-tap toggle banner at the top of Today, new In-Patient tab grouping consecutive hospital days into date ranges, e.g. `7/13/2026` alone or `7/13/2026 – 7/14/2026 (2 days)`). Weight input now defaults to the last recorded weight; Temperature input now defaults to 98.5°F. Added a 1–10 pain-level dropdown to Morphine and Tylenol logging, shown in Today's Journal and History. Zofran changed from an 8-hour gap timer to a plain as-needed med — no lock, no scheduled or gap-based reminder (the chemo-day clinical block is unchanged). New `cycle_start`, `cycle_end`, and `inpatient` entry types; `inpatient` entries excluded from Today's Journal and History's per-day rows/counts entirely (they have their own tab); `cycle_start`/`cycle_end` still show as History rows but are excluded from the day's dose count. | Testing |
+| v28 | Jul 13, 2026 | v27 | *(retroactively renumbered from "t1" to match the new versioning convention below — no functional change)* Chemo cycle: chemo date scheduling, Dexamethasone auto-appearing med (2 tablets, 8 AM & 2 PM, day before chemo through day after), Zofran locked on chemo days 1–2 with override (superseded in v29 — see above), phased red chemo banners (day −2 through +1), missed-dose alert system | Testing |
 
-**Rollback:** every test version gets a full-history bundle saved before changes, same as production. To roll back, redeploy the previous test version's files.
+**Rollback:** every test version gets a full-history bundle saved before changes, same as
+production. To roll back, redeploy the previous test version's `index.html`/`sw.js` and revert this
+table's top row.
 
-**Testing notes:** log test doses freely — this app writes to `caretracker_test_entries`, not the real database. Use the date picker in "Chemo schedule" to simulate different days relative to chemo.
+**Testing notes:** log test doses freely — this app writes to `caretracker_test_entries`, not the
+real database. Use the date picker in "Chemo schedule" to simulate different days relative to chemo.
 
 ---
 
-# Brandi's CareTracker
+# Brandi's CareTracker (Testing)
 
-Real-time family medication & vitals tracker — a progressive web app (PWA) for logging medications, temperature, and weight with live Firebase sync and push notification reminders.
+Real-time family medication & vitals tracker — a progressive web app (PWA) for logging medications,
+temperature, weight, menstrual cycle, and hospital (in-patient) stays with live Firebase sync. This
+build also carries an in-development chemo-cycle scheduling system and missed-dose alerts, ahead of
+what's live in production.
 
-**Live App:** https://arnjnnngs.github.io/care-tracker/  
-**Cache Reset:** https://arnjnnngs.github.io/care-tracker/reset.html  
-**Repository:** https://github.com/arnjnnngs/care-tracker
+**Live App (testing):** https://arnjnnngs.github.io/care-tracker-testing/
+**Live App (production):** https://arnjnnngs.github.io/care-tracker/
+**Repository:** https://github.com/arnjnnngs/care-tracker-testing
 
 ## Overview
 
-CareTracker is a single-page PWA built with vanilla JavaScript and Firebase Firestore. It tracks daily medication doses, temperature readings, and weight for a caregiver workflow. The app uses real-time Firestore listeners for instant multi-device sync and Firebase Cloud Messaging (FCM) for scheduled push notification reminders via GitHub Actions.
+CareTracker is a single-page PWA built with vanilla JavaScript and Firebase Firestore. It tracks
+daily medication doses, temperature, weight, menstrual cycle onset/end, and hospital in-patient days
+for a caregiver workflow, plus a chemo-cycle scheduling system and missed-dose alerting that are
+still under test here. The app uses real-time Firestore listeners for instant multi-device sync.
+Push notifications are disabled in this build (`TEST_MODE`).
 
 ## Tech Stack
 
-- **Frontend:** Vanilla JavaScript (ES modules), inline CSS, single-file `index.html` (1042 lines)
-- **Backend/Database:** Firebase Firestore (project `fuelforge-7c132`)
-- **Push Notifications:** Firebase Cloud Messaging (FCM)
+- **Frontend:** Vanilla JavaScript (ES module in production build; classic script in the QA harness), inline CSS, single-file `index.html`
+- **Visual theme:** Light pink glassmorphism (`#FFF0F3` background, `#AA5375` accent) — **not** production's dark theme
+- **Backend/Database:** Firebase Firestore (project `fuelforge-7c132`, shared with prod, isolated by collection name)
 - **Hosting:** GitHub Pages
-- **Automation:** GitHub Actions cron job for medication reminders
 - **Fonts:** Hanken Grotesk, IBM Plex Mono (Google Fonts)
 - **Firebase SDK:** v10.12.0 (ESM imports from gstatic CDN)
 
 ## Project Structure
 
 ```
-care-tracker/
-├── .github/workflows/
-│   └── reminders.yml            # Cron job: med reminder notifications
-├── firebase-messaging-sw.js     # FCM service worker for background push
-├── icon-192.png                 # PWA icon (192x192)
-├── icon-512.png                 # PWA icon (512x512)
-├── index.html                   # Main app (all HTML/CSS/JS in one file)
-├── manifest.webmanifest         # PWA manifest
+care-tracker-testing/
+├── CLAUDE.md                  # Standing rules for AI/human contributors — read first
+├── firebase-messaging-sw.js   # FCM service worker, present but unused while TEST_MODE is on
+├── icon-192.png                # PWA icon (192x192)
+├── icon-512.png                # PWA icon (512x512)
+├── index.html                  # Main app (all HTML/CSS/JS in one file)
+├── manifest.webmanifest        # PWA manifest (name: "CareTracker TESTING")
 ├── reset.html                   # Cache reset utility for stuck service workers
-├── send-reminders.js            # Node.js script for sending FCM notifications
 └── sw.js                        # Service worker (caching + notification clicks)
 ```
+
+There is **no** `.github/workflows/` and **no** `send-reminders.js` in this repo — the scheduled/
+gap-based push reminder system that exists in production does not run here at all, because
+`TEST_MODE` disables push registration entirely.
 
 ## Firebase Collections
 
 | Collection | Purpose |
 |---|---|
-| `caretracker_entries` | All logged data — meds, temperature, weight |
-| `fcm_tokens` | Registered device tokens for push notifications |
-| `fcm_tracking` | Tracks last-notified timestamps to prevent duplicate alerts |
+| `caretracker_test_entries` | All logged test data — meds, temperature, weight, cycle start/end, in-patient days. **Isolated from real data.** |
+| `caretracker_entries` | Production's real collection — this app must never write here |
 
 ## Service Worker Strategy
 
-- **Cache name:** `caretracker-v19` (bump this to force updates on all devices)
-- **Static assets (cache-first):** `./`, `index.html`, `manifest.webmanifest`, icons
-- **Firebase/API calls (network-first):** `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
-
-## Push Notification Reminders
-
-The GitHub Actions workflow (`reminders.yml`) runs `send-reminders.js` every 30 minutes from 8 AM–10 PM CDT. It sends two types of reminders:
-
-**Scheduled (time-based):**
-- **8:30 AM** — Morning Meds: Protonix (morning) & Zofran
-- **8:00 PM** — Evening Meds: Protonix, Iron, Buspirone, Paroxetine, Compazine
-
-**Gap-based:**
-- **Zofran** — checks if 8-hour gap since last dose has elapsed; sends "Zofran Available" notification. Uses `fcm_tracking/zofran_gap` doc to avoid duplicate alerts.
-
-**Quiet hours:** No notifications between 10 PM and 8 AM Central.
+- Cache name: `caretracker-testing-v29` (bump this — matching the app version above — to force updates on all devices)
+- Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
+- Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
 ## Tracked Medications
 
 | Medication | Generic | Tracking Type |
 |---|---|---|
-| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses |
-| Zofran | Ondansetron | 8h gap timer, push notification when available |
-| Compazine | Prochlorperazine | 6h min gap; 10 PM routine + earlier as needed (in Scheduled Meds card) |
-| Morphine | Immediate release | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg) doses |
+| Dexamethasone | Steroid, chemo premed | 2 tablets, 8 AM & 2 PM, only appears day before chemo through day after (chemoOnly) |
+| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses. **1–10 pain-level dropdown captured at log time (v29)** |
+| Zofran | Ondansetron | **As-needed — no gap timer, no reminders** (changed in v29). Blocked on chemo days 1–2 with override, per care team |
+| Compazine | Prochlorperazine | 6h min gap; 10 PM routine + earlier as needed (in Evening meds card) |
+| Morphine | Immediate release | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg) doses. **1–10 pain-level dropdown captured at log time (v29)** |
 | Lidocaine | Topical cream | 4h min gap, max 4 applications per day |
 | Imodium | Loperamide | Daily pill count limit (4 pills) |
-| Protonix | Pantoprazole | Twice daily windows (8 AM–noon, 8–10 PM) + reminders |
-| Buspirone | BuSpar | Once daily, 10 PM |
-| Paroxetine | Paxil | Once daily, 10 PM |
-| Iron | Ferrous sulfate | Once daily, 10 PM |
+| Protonix | Pantoprazole | Twice daily windows (8 AM–noon, 8–10 PM), missed-dose alerts |
+| Buspirone | BuSpar | Once daily, 10 PM, missed-dose alerts |
+| Paroxetine | Paxil | Once daily, 10 PM, missed-dose alerts |
+| Iron | Ferrous sulfate | Once daily, 10 PM, missed-dose alerts |
 | Senokot | Senna | 2 pills, 8 AM & 10 PM windows, as needed |
 
 ## Missed Dose Alerts
 
-Protonix, Buspirone, Paroxetine, and Iron are tracked for missed doses. When one of their schedule windows closes with no dose logged, the app shows a red alert banner at the top of Today (covering today's and yesterday's misses, so an overnight miss is still visible the next morning), a red MISSED row in Today's Journal under the matching time category, and red MISSED rows plus a "N MISSED" day summary in History. A dose logged early (before the window opened, same day) counts as covering that window. As-needed meds (Senokot, Compazine, Tylenol, Zofran, Morphine, Lidocaine, Imodium) are never flagged. Tracking starts July 12, 2026 — no retroactive flags before that date.
+Dexamethasone (chemo days only), Protonix, Buspirone, Paroxetine, and Iron are tracked for missed
+doses. When a schedule window closes with no dose logged, the app shows a red alert banner at the
+top of Today (covering today's and yesterday's misses), a red MISSED row in Today's Journal, and red
+MISSED rows plus a "N MISSED" day summary in History. Tracking starts July 12, 2026. Zofran, Tylenol,
+Morphine, Lidocaine, Imodium, Compazine, and Senokot are as-needed and never flagged.
 
-## Vitals Tracking
+## Chemo Cycle
 
-- **Temperature** — logged in °F with timestamp
-- **Weight** — logged in lbs with timestamp
-- Both display last reading time and have dedicated input + "Log" button
+Set a chemo date on the Today tab's "Chemo schedule" card. The app derives offsets from that date:
+Dexamethasone appears (and is required) days −1 through +1, phased red chemo banners run days −2
+through +1, and Zofran is blocked on days 0–1 (override available if the care team says otherwise).
+
+## Vitals, Cycle & In-Patient Tracking
+
+- **Temperature** — logged in °F with timestamp; input **defaults to 98.5°F** (v29)
+- **Weight** — logged in lbs with timestamp; input **defaults to the last recorded weight** (v29)
+- **Menstrual Cycle** — logged as two one-tap events, Period Start and Period End, from a card at the top of the Weight tab. Tapping logs immediately at the current time (no date/time picker). Shows a running "Day N" counter (days since the most recently logged period start) and an "Active" badge while a period is in progress.
+- **In-Patient (hospital) days** — a toggle banner at the very top of the Today tab marks/unmarks the current day as in-patient (meds given by hospital staff, not logged here) with one tap. A dedicated **In-Patient** tab lists all marked days, merging consecutive days into a range (e.g. `7/13/2026` alone, or `7/13/2026 – 7/14/2026 (2 days)` once the next day is also marked).
 
 ## App Views
 
-- **Today** — dose counters (shown only for meds used in the last 7 days), vitals inputs, individual quick-log cards (incl. Protonix and Senokot), and a grouped "Evening meds" card for Buspirone/Paroxetine/Iron/Compazine with a one-tap "Take all" button
-- **History** — historical view of logged entries, grouped per day into Overnight (12–6 AM), Morning (6–noon), Afternoon (noon–5 PM), Evening (5 PM–midnight)
-- **Weight** — weight tracking over time
+- **Today** — In-Patient toggle banner at the top, missed-dose banner, chemo banner (when applicable), dose counters, vitals inputs, quick-log cards, and a grouped "Evening meds" card with a one-tap "Take all"
+- **History** — grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient entries (which have their own views); Period Start/End rows appear but aren't counted as doses
+- **Weight** — weight trend chart, plus the Menstrual Cycle card
+- **In-Patient** — grouped date ranges of hospital stays
 
 ## Troubleshooting: "All Blank" / Stale Cache
 
-If the app shows a blank screen on a device:
-
-1. Visit https://arnjnnngs.github.io/care-tracker/reset.html — this automatically unregisters all service workers, clears all caches, and redirects back to the app
+1. Visit the reset page (`reset.html` on this app's URL) — unregisters service workers, clears caches, redirects back
 2. Or manually: Chrome DevTools → Application → Service Workers → Unregister, then hard refresh
-3. On mobile: Settings → Site settings → arnjnnngs.github.io → Clear & reset
+3. On mobile: Settings → Site settings → this URL → Clear & reset
 
-When deploying new versions, bump the `CACHE` constant in `sw.js` (currently `caretracker-v19`).
-
-## GitHub Secrets Required
-
-| Secret | Purpose |
-|---|---|
-| `FIREBASE_SERVICE_ACCOUNT` | JSON service account key for firebase-admin (used by `send-reminders.js`) |
-
-## Version History
-
-| Version | Date | Changes |
-|---|---|---|
-| v27 | Jul 13, 2026 | Missed-dose banner also shows yesterday's misses (overnight rollover fix) |
-| v26 | Jul 12, 2026 | Missed-dose alert system: red banner + journal/history MISSED rows for Protonix, Buspirone, Paroxetine, Iron |
-| v25 | Jul 12, 2026 | New time-of-day categories in Today's Journal and History: Overnight 12–6 AM, Morning 6–noon, Afternoon noon–5 PM, Evening 5 PM–midnight |
-| v24 | Jul 12, 2026 | Layout: Protonix and Senokot get individual cards; group card renamed "Evening meds" (Buspirone, Paroxetine, Iron, Compazine) |
-| v23 | Jul 12, 2026 | Add Senokot (senna): 2 pills, 8 AM & 10 PM windows, as needed; scheduled-card and Take-all logs now record each med's default dose |
-| v22 | Jul 12, 2026 | Block dose buttons that would exceed remaining daily limit; Buspirone/Paroxetine/Iron 10 PM windows; Compazine joins Scheduled Meds card; "Take all" one-tap logging; Early tag now based on logged time, not click time |
-| v21 | Jul 11, 2026 | Tylenol ceiling 2500 mg; Protonix windows 8 AM/8 PM; future-time log warning; delete confirmation + 48h delete window; grouped Scheduled Meds card; conditional counters + Lidocaine counter; WCAG AA contrast pass (pink theme kept) |
-| v20 | Jul 11, 2026 | Add Lidocaine topical cream (4h gap, max 4 applications/day); generalize daily-count ceiling; doc corrections |
-| v19 | Jul 7, 2026 | Remove "Clear all" buttons, preserve history |
-| v18 | Jul 2, 2026 | Add FCM push notifications + firebase-messaging-sw.js |
-| v17 | Jul 2, 2026 | Remove Tylenol/Morphine/Imodium from reminders |
-| v16 | Jul 2, 2026 | Add med reminder notifications |
-| v15 | Jul 2, 2026 | Light pink glassmorphism theme + fix sticky tabs |
-| v14 | Jul 1, 2026 | Fix input focus loss on mobile during render cycle |
-| v13 | Jul 1, 2026 | Bump SW cache to force refresh on all devices |
+When deploying new versions, bump the `CACHE` constant in `sw.js` to match the new app version.
 
 ## Maintaining This Documentation
 
-**When making changes to CareTracker, update these docs in the same commit:**
+When making changes here, update these docs in the same pass:
 
-- **README.md** (this file) — Update the Version History table, and revise any sections affected by the change (e.g., if you add a new medication, update the Tracked Medications table; if you change the service worker cache strategy, update that section).
-- **CARETRACKER_HANDOFF.md** — Update the "Last updated" date at the top, add the new version to the Version History table, and revise any affected sections (medication definitions, Firebase collections, reminder schedule, known issues, etc.).
+- **CLAUDE.md** — the standing rules file; update if a rule or gotcha changes
+- **README.md** (this file) — new row in the Version History table (numbered per the versioning
+  rule above), and revise any sections affected by the change
+- **CARETRACKER_HANDOFF.md** — update "Last updated" and "Current version" at the top, add the new
+  version to its Version History table, and revise any affected sections
 
-Both files live in the repo root and serve as the single source of truth for onboarding new contributors or AI agents.
+All three files live in the repo root and are the source of truth for onboarding new contributors or
+AI agents — treat doc updates as part of the feature, not a follow-up task.

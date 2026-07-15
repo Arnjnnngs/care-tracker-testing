@@ -1,301 +1,219 @@
 # CareTracker TESTING — AI Agent Handoff Document
 
-> **THIS IS THE STAGING VARIANT.** Differences from production: `TEST_MODE = true` in index.html (test collection `caretracker_test_entries`, push/local notifications disabled, orange TESTING banner), sw.js cache `caretracker-testing-vN`, manifest renamed. Features under test here that are NOT yet in production: chemo cycle system (chemo_date records, Dexamethasone chemoOnly med, Zofran chemo-day block, chemo banners). Promote by copying files to the care-tracker repo with TEST_MODE=false and a prod cache bump.
+> **THIS IS THE STAGING VARIANT.** `TEST_MODE = true` in `index.html` — writes to
+> `caretracker_test_entries` (never `caretracker_entries`), push/local notifications fully disabled,
+> orange "🧪 Testing app" banner in the header. sw.js cache is `caretracker-testing-vN`. Features
+> under test here that are NOT (yet) in production: chemo cycle system, missed-dose alerts,
+> menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale, Zofran as-needed.
+> Promote to prod by porting the relevant changes into `care-tracker`'s `index.html` with
+> `TEST_MODE = false` and a prod cache bump — **only when Aaron explicitly says to.**
 
-> **Purpose:** Complete context for any AI assistant to understand, maintain, and extend the CareTracker project without prior knowledge.
+> **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
+> without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 11, 2026  
-> **Current version:** v27
+> **Last updated:** July 14, 2026
+> **Current version:** v29 (see README.md's versioning convention — this repo's version is always
+> "current live prod version + 1" while testing is ahead)
 
 ---
 
 ## 1. What This Project Is
 
-CareTracker is a **progressive web app (PWA)** that tracks medications, temperature, and weight for a family caregiver (caring for Brandi). It is a **single-file vanilla JavaScript app** — no build step, no framework, no node_modules for the frontend. The entire app lives in `index.html` (1042 lines, 61.7 KB). Firebase Firestore provides the database with real-time sync, and Firebase Cloud Messaging (FCM) handles push notification reminders.
+CareTracker is a **progressive web app (PWA)** that tracks medications, vitals, menstrual cycle, and
+hospital in-patient days for a family caregiver (caring for Brandi). It's a **single-file vanilla
+JavaScript app** — no build step, no framework. The entire app lives in `index.html`. Firebase
+Firestore provides the database with real-time sync. This build has push notifications disabled.
 
-**The core user flow:** A caregiver opens the app on their phone, taps a medication quick-log button (e.g., "500 mg" or "1000 mg" for Tylenol), and the dose is instantly synced to Firestore and reflected across all devices. The app enforces dosing limits (e.g., max 4000 mg Acetaminophen per 24h, 8-hour gap for Zofran) and shows countdown timers. Push notifications remind the caregiver when meds are due.
-
----
+**Core user flow:** a caregiver opens the app, taps a quick-log button (e.g. "500 mg" Tylenol), and
+the dose instantly syncs to Firestore across devices. The app enforces dosing limits/gaps where
+relevant, tracks a chemo cycle and flags missed doses, and now also tracks menstrual cycle and
+in-patient hospital days.
 
 ## 2. Links
 
 | Resource | URL |
 |---|---|
-| **Live App** | https://arnjnnngs.github.io/care-tracker/ |
-| **Cache Reset Page** | https://arnjnnngs.github.io/care-tracker/reset.html |
-| **GitHub Repository** | https://github.com/arnjnnngs/care-tracker |
-| **GitHub Commits** | https://github.com/arnjnnngs/care-tracker/commits/main |
-| **GitHub Actions** | https://github.com/arnjnnngs/care-tracker/actions |
+| **Live App (testing)** | https://arnjnnngs.github.io/care-tracker-testing/ |
+| **Live App (production)** | https://arnjnnngs.github.io/care-tracker/ |
+| **GitHub Repository** | https://github.com/arnjnnngs/care-tracker-testing |
 | **Firebase Console** | https://console.firebase.google.com/project/fuelforge-7c132 |
-
----
 
 ## 3. Repository Structure
 
 ```
-care-tracker/
-├── .github/
-│   └── workflows/
-│       └── reminders.yml            # GitHub Actions cron — sends med reminders every 30 min
-├── firebase-messaging-sw.js         # FCM service worker — handles background push notifications
-├── icon-192.png                     # PWA icon 192x192
-├── icon-512.png                     # PWA icon 512x512
-├── index.html                       # THE ENTIRE APP — HTML + CSS + JavaScript (1042 lines)
-├── manifest.webmanifest             # PWA manifest (name, icons, theme, display mode)
-├── reset.html                       # Utility page — nukes service workers + caches, redirects to app
-├── send-reminders.js                # Node.js server-side script — queries Firestore, sends FCM pushes
-└── sw.js                            # App service worker — caching strategy + notification click handler
+care-tracker-testing/
+├── CLAUDE.md                   # Standing rules — read first
+├── firebase-messaging-sw.js    # FCM service worker, present but unused (TEST_MODE disables push)
+├── icon-192.png                # PWA icon 192x192
+├── icon-512.png                # PWA icon 512x512
+├── index.html                  # THE ENTIRE APP — HTML + CSS + JavaScript
+├── manifest.webmanifest        # PWA manifest (name: "CareTracker TESTING")
+├── reset.html                  # Nukes service workers + caches, redirects to app
+└── sw.js                       # App service worker — caching + notification click handler
 ```
 
-**There is no build step.** Edits to `index.html` are deployed by pushing to `main` — GitHub Pages serves from the root of `main`.
-
----
+**No build step.** Edits to `index.html` deploy by pushing to `main` — GitHub Pages serves the repo
+root. **There is no `.github/workflows/` and no `send-reminders.js` in this repo** — unlike
+production, the scheduled/gap-based reminder cron system doesn't exist here at all.
 
 ## 4. Tech Stack Details
 
-### Frontend
-- **Language:** Vanilla JavaScript with ES modules (`<script type="module">`)
-- **Rendering:** Custom reactive rendering (not React/Vue/etc. — vanilla DOM manipulation)
-- **Styling:** Inline `<style>` block in index.html — dark theme with glassmorphism elements
-- **Fonts:** Hanken Grotesk (body) + IBM Plex Mono (monospace data), loaded from Google Fonts
-- **Theme colors:** Background `#FFF0F3` (light pink, meta theme), actual rendered dark theme `#1a1a2e`-ish, accent green `#0F9D6B`
-
-### Backend / Database
-- **Firebase Project:** `fuelforge-7c132` (the "FuelForge" project — CareTracker shares this project)
-- **Firebase SDK:** v10.12.0 (loaded as ESM from `https://www.gstatic.com/firebasejs/10.12.0/`)
-- **Database:** Cloud Firestore
-- **Auth:** None — the app is open (no user authentication)
-- **Push:** Firebase Cloud Messaging (FCM)
-
-### Hosting & CI/CD
-- **Hosting:** GitHub Pages (auto-deploys from `main` branch root)
-- **CI:** GitHub Actions workflow `reminders.yml` runs on a cron schedule
-- **No other CI/CD** — no tests, no linting, no build pipeline
-
----
+- **Language:** Vanilla JavaScript, `<script type="module">` in the shipped app (imports Firebase
+  from the gstatic CDN). A separate QA copy rewrites this to a classic `<script>` with a mocked
+  Firestore, since jsdom does not reliably execute module scripts.
+- **Rendering:** Custom `h()` hyperscript-style DOM builder + full `render()` on every `setState()`.
+- **Styling:** Inline `<style>` + inline `style` objects on every element. **Theme is light pink
+  glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) — do not describe this as dark;
+  that's production's old theme, not this one.
+- **Backend:** Firebase Firestore, project `fuelforge-7c132` (shared with prod; isolated by
+  collection name, see below). No auth.
+- **Hosting:** GitHub Pages.
 
 ## 5. Firebase Collections
 
-### `caretracker_entries`
-The main data collection. Each document is a single logged event.
+### `caretracker_test_entries` (this app's collection — `COL_NAME` when `TEST_MODE` is true)
+Each document is one logged event. Fields actually written by this app's code:
 
-**Document fields (verified against live data, July 11, 2026):**
-- `medId` — string identifier: `"tylenol"`, `"zofran"`, `"compazine"`, `"morphine"`, `"lidocaine"`, `"imodium"`, `"protonix"`, `"buspirone"`, `"paroxetine"`, `"iron"`, `"senokot"`, or `"temp"` / `"weight"` for vitals
-- `ts` — timestamp (milliseconds since epoch) of when the dose was taken
-- `dose` — human-readable dose label string (e.g., `"1000 mg"`, `"½ tab · 7.5 mg"`, `"99.8 °F"`) or null
-- `mg` — numeric milligrams (0 for non-mg meds)
-- `pills` — count for pill/application-limited meds (Imodium, Lidocaine); only present when applicable
+- `medId` — `"dexamethasone" | "tylenol" | "zofran" | "compazine" | "morphine" | "lidocaine" | "imodium" | "protonix" | "buspirone" | "paroxetine" | "iron" | "senokot" | "temp" | "weight" | "chemo_date" | "cycle_start" | "cycle_end" | "inpatient"`
+- `ts` — ms-since-epoch of the event
+- `dose` — human-readable label (e.g. `"1000 mg"`, `"½ tab · 7.5 mg"`) or `null`
+- `mg` — numeric mg (0 for non-mg entries)
+- `pills` — pill/application count, only present when relevant
 - `temp` / `weight` — numeric value on vitals entries
-- `override` — boolean, present when the dose was logged early past a lock
+- `override` — boolean, present when logged early past a lock
+- `painLevel` — integer 1–10, present only on Morphine or Tylenol doses where a level was selected (new in v29; Tylenol added same day as Morphine)
+- `loggedAt` — present on `chemo_date` records; used to find the most recently *set* chemo date (the
+  record's own `ts` is the chemo date itself, which can be in the future)
 
-### `fcm_tokens`
-Stores device push notification tokens.
+`cycle_start` / `cycle_end` and `inpatient` records carry no special fields beyond the common ones —
+they're pure event markers, always logged at `Date.now()` (no time picker).
 
-**Document fields:**
-- `token` — the FCM registration token string
-- Document ID = the token itself
+### `caretracker_entries`
+Production's real collection. **This app must never write here.**
 
-### `fcm_tracking`
-Prevents duplicate notifications.
+## 6. Medication & Feature Definitions
 
-**Known document:** `zofran_gap`
-- `lastDoseTs` — timestamp of the last Zofran dose that was already notified about
-- `notifiedAt` — timestamp of when the notification was sent
-
----
-
-## 6. Medication Definitions
-
-| ID | Display Name | Generic | Dosing Rules |
-|---|---|---|---|
-| `tylenol` | Tylenol | Acetaminophen | Daily max: 2500 mg (resets at midnight). Min gap: 4 hours. Quick-log buttons: 500 mg, 1000 mg |
-| `zofran` | Zofran | Ondansetron | 8-hour gap between doses. Shows countdown timer. Push notification when gap expires |
-| `compazine` | Compazine | Prochlorperazine | 6-hour min gap. 10 PM routine, earlier as needed. Shown in the Evening Meds group card, not Quick Log |
-| `morphine` | Morphine | Immediate release | 4-hour min gap. Quick-log buttons: ½ tab (7.5 mg), full tab (15 mg) |
-| `lidocaine` | Lidocaine | Topical cream | 4-hour min gap. Daily max: 4 applications (resets at midnight). Quick-log button: Apply |
-| `imodium` | Imodium | Loperamide | Daily limit: 4 pills (resets at midnight). Quick-log buttons: 2 pills, 1 pill |
-| `protonix` | Protonix | Pantoprazole | Twice daily windows: morning (8–12) & evening (20–22). Early logging allowed via override |
-| `buspirone` | Buspirone | BuSpar | Once daily, 10 PM window (22–24) |
-| `paroxetine` | Paroxetine | Paxil | Once daily, 10 PM window (22–24) |
-| `iron` | Iron | Ferrous sulfate | Once daily, 10 PM window (22–24) |
-| `senokot` | Senokot | Senna | As needed: 2 pills, morning window (8–12) & night window (22–24). Default dose "2 pills" (pills: 2) recorded on log |
+| ID | Display Name | Rules |
+|---|---|---|
+| `dexamethasone` | Dexamethasone | `chemoOnly: true` — only appears in Quick Log when `dexActiveOn(day)` (day −1 to +1 relative to chemo date). 2 tablets, 8 AM & 2 PM windows. Missed-dose tracked. |
+| `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29)** — same 1–10 "Pain level" dropdown as Morphine |
+| `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–1 via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
+| `compazine` | Compazine | 6h min gap, shown in Evening meds card |
+| `morphine` | Morphine | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg). **`painScale: true` (v29)** — time modal shows a 1–10 "Pain level" dropdown (`Not recorded` is a valid choice); stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field (see above) |
+| `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
+| `imodium` | Imodium | Daily limit 4 pills |
+| `protonix` | Protonix | Windows 8 AM–noon & 8–10 PM, missed-dose tracked |
+| `buspirone` / `paroxetine` / `iron` | — | Once daily, 10 PM window, missed-dose tracked |
+| `senokot` | Senokot | As-needed, 8 AM & 10 PM windows |
 
 ### Vitals
-- **Temperature** — logged in °F, shows last reading time
-- **Weight** — logged in lbs, shows last reading time
+- **Temperature** — °F. Input **defaults to `98.5`** (`tempDefault()`, v29) instead of a blank field; user can overwrite before logging.
+- **Weight** — lbs. Input **defaults to the last recorded weight** (`weightDefault()`, v29); falls back to empty if none logged yet.
 
----
+### Chemo cycle
+- `nextChemoTs()` reads the most recently-set (`loggedAt`) `chemo_date` record; `ts: 0` means cleared.
+- `chemoOffsetFor(dayTs)` = days between a given day and the chemo date (negative = before).
+- `dexActiveOn(day)` = offset in `[-1, 1]`. `zofranBlockedOn(day)` = offset in `{0, 1}`.
+- Today tab shows a phased red banner for offsets `[-2, 1]` and a "Chemo schedule" card to set/clear the date.
 
-## 7. Service Worker Architecture
+### Missed-dose alerts
+`missedDosesFor(dayTs, now)` checks every med with `alerts: true` and `windows` (Dexamethasone,
+Protonix, Buspirone, Paroxetine, Iron). A window counts as covered by any dose logged after the
+previous window closed and before this one closes (so early logs count). Tracking starts
+`MISSED_TRACK_SINCE` = Jul 12, 2026. Rendered as a non-dismissible red Today banner (today +
+yesterday's misses), red rows in Today's Journal, and red rows + "N MISSED" summaries in History.
 
-### sw.js (App Service Worker)
-**Cache name:** `caretracker-v19` — **bump this string when deploying changes** to force all devices to get the new version.
+### Menstrual cycle (v29)
+- `cycleEntries()` / `cycleActive()` — active whenever the most recent of `cycle_start`/`cycle_end` is a start.
+- `daysSinceCycleStart()` — `dayStart(now) - dayStart(lastStart.ts)`, in days, +1 (start day = Day 1).
+- `logCycleStart()` / `logCycleEnd()` — instant one-tap writes at `Date.now()`, **no time picker by design**.
+- UI: a card at the top of the Weight tab with an "Active" badge and a single context-sensitive button ("Log Period Start" / "Log Period End").
 
-**Cached shell files:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, `'icon-192.png'`, `'icon-512.png'`
+### In-Patient day tracking (v29)
+- `isInpatientToday()` — true if any `inpatient` entry's day matches today.
+- `toggleInpatientToday()` — adds an `inpatient` entry at `Date.now()` if not marked, or deletes today's `inpatient` entry if already marked ("Undo"). Always uses real time, not a picker.
+- `inpatientRanges()` — collects distinct in-patient calendar days, sorts, and merges any two days exactly 86,400,000 ms apart into a `{start, end}` range; returned most-recent-first.
+- `fmtInpatientRange()` — single day → `M/D/YYYY`; multi-day → `M/D/YYYY – M/D/YYYY (N days)`.
+- UI: a toggle banner at the very top of the Today tab (above the missed-dose banner), and a 4th
+  "In-Patient" tab listing the ranges. `inpatient` entries are excluded entirely from Today's
+  Journal and History's day rows/dose counts (they're not timestamped medical events).
 
-**Fetch strategy:**
-- **Network-first** for: `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — these are Firebase API calls, fonts, and SDK files. Falls back to cache if network fails.
-- **Cache-first** for everything else (static assets). Falls back to network if not cached.
+## 7. Service Worker
 
-**Notification click handler:** When user taps a push notification, it focuses the existing CareTracker tab or opens a new one at `'./'`.
+**Cache name:** `caretracker-testing-v29` — bump this (using this repo's own version number, see
+README) on every deploy to force devices to refresh.
 
-### firebase-messaging-sw.js (FCM Service Worker)
-Separate service worker specifically for Firebase Cloud Messaging background message handling. Uses the Firebase compat SDK (not ESM). Duplicates the Firebase config. Handles `onBackgroundMessage` by calling `self.registration.showNotification()` with:
-- Icon/badge: `icon-192.png`
-- Tag: `caretracker-reminder`
-- `requireInteraction: true` (notification stays until dismissed)
-- Vibrate pattern: `[200, 100, 200]`
+**Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
 
-Also has its own notification click handler (identical logic to sw.js).
+**Fetch strategy:** network-first for `firestore.googleapis.com` / `gstatic.com` / `googleapis.com`,
+cache-first for everything else.
 
----
+`firebase-messaging-sw.js` exists (copied from prod) but is inert here — `subscribePush()` returns
+immediately when `TEST_MODE` is true, so no token is ever registered and this service worker never
+receives a background message in practice.
 
-## 8. Push Notification System
+## 8. Deployment
 
-### How It Works
-1. **User subscribes:** The app calls `getToken()` from FCM and stores the device token in Firestore `fcm_tokens` collection.
-2. **Cron runs:** Every 30 minutes (8 AM–10 PM CDT), GitHub Actions runs `send-reminders.js`.
-3. **Script checks time:** Determines if a scheduled reminder window is active, and checks Zofran gap status.
-4. **Script sends:** Uses `firebase-admin` to send FCM messages to all registered tokens.
-5. **Device receives:** `firebase-messaging-sw.js` handles the background message and shows a system notification.
-6. **Stale tokens cleaned:** If a token is invalid/expired, the script deletes it from Firestore.
+1. Edit `index.html` (and `sw.js`, docs) locally.
+2. Bump `CACHE` in `sw.js` to the new version number (see README's versioning convention).
+3. **Ask Aaron before pushing** — this repo included. Once confirmed, push to `main`; GitHub Pages
+   auto-deploys within ~1 minute.
+4. Devices with the old service worker pick up the new version on next visit.
 
-### Reminder Schedule (Central Time)
+### Cache reset
+Visit this app's `reset.html` — unregisters service workers, clears caches, redirects with a
+cache-busting query string.
 
-| Time | Type | Notification |
-|---|---|---|
-| 8:25–8:35 AM | Scheduled | "Morning Meds Due" — Protonix (morning) & Zofran |
-| 7:55–8:05 PM | Scheduled | "Evening Meds Due" — Protonix, Iron, Buspirone, Paroxetine, Compazine |
-| Every 30 min | Gap-based | "Zofran Available" — only if 8h gap since last dose has elapsed |
-| 10 PM–8 AM | Quiet hours | No notifications sent |
+## 9. Known Issues & Gotchas
 
-### GitHub Actions Workflow (reminders.yml)
-- **Triggers:** Cron schedule + manual `workflow_dispatch`
-- **Cron expressions:** `'0,30 13-23 * * *'` and `'0,30 0-3 * * *'` (UTC, covering 8 AM–10 PM CDT)
-- **Runner:** `ubuntu-latest`, Node 20
-- **Dependencies:** `firebase-admin@12` (installed at runtime via npm)
-- **Secret required:** `FIREBASE_SERVICE_ACCOUNT` — JSON service account key for the `fuelforge-7c132` project
+1. **Documentation drift is a known past failure mode for this repo** — an earlier version of this
+   handoff described a dark theme, push notifications, and a `send-reminders.js`/GitHub Actions
+   system that never existed here; it had been copy-pasted from production almost verbatim. If
+   anything in this document looks inconsistent with the actual `index.html`, trust the code and
+   fix the doc — don't propagate the mismatch further.
+2. **No authentication** — anyone with the URL can read/write test data. Not a real risk since this
+   collection isn't real medical data, but worth knowing.
+3. **Shared Firebase project** (`fuelforge-7c132`) — isolated from prod only by collection name, not
+   by a separate project. Don't touch project-level Firebase settings without checking prod impact.
+4. **Zofran's chemo-day block is independent of its (now-removed) gap timer** — don't assume
+   `gapH: 0` means Zofran is unrestricted; `status()` checks `zofranBlockedOn()` before the gap logic
+   and still locks it (with override) on chemo days 0–1.
+5. **`painLevel` is optional** — the time modal's dropdown defaults to "Not recorded"; don't assume
+   every Morphine entry has one when reading history data.
+6. **Single-file architecture** — same tradeoff as prod: simple, but one large file to edit carefully.
 
----
+## 10. Version History
 
-## 9. Deployment
+See README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
+`vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
+counter).
 
-### How to deploy changes
-1. Edit files locally (usually just `index.html`)
-2. **Bump the cache version** in `sw.js` — change `const CACHE = 'caretracker-v19';` to `v20`, etc.
-3. Push to `main` branch
-4. GitHub Pages auto-deploys within ~1 minute
-5. Devices with the old service worker will pick up the new version on their next visit (the activate event deletes old caches)
-
-### Cache Reset for Stuck Devices
-If a device shows a blank screen or stale content:
-- Navigate to `https://arnjnnngs.github.io/care-tracker/reset.html`
-- This page automatically unregisters all service workers, deletes all caches, and redirects to the app with a cache-busting query string
-
----
-
-## 10. Known Issues & Gotchas
-
-1. **"All blank" on some devices** — Caused by stale service worker cache. The reset page fixes this. Always bump `CACHE` version in `sw.js` when deploying.
-
-2. **No authentication** — The app has no login. Anyone with the URL can read/write data. The Firebase config (API keys) are in the client-side code — this is normal for Firebase web apps, but Firestore security rules should be configured in the Firebase console.
-
-3. **Shared Firebase project** — CareTracker uses the `fuelforge-7c132` project, which may have other collections/apps. Don't modify project-level settings without checking.
-
-4. **Single-file architecture** — The entire app is in `index.html`. This makes it simple but means there's no code splitting, no tree shaking, and editing is done on one large file. If the app grows significantly, consider splitting into modules.
-
-5. **Duplicate Firebase config** — The Firebase config appears in both `index.html` and `firebase-messaging-sw.js`. Keep them in sync when changing.
-
-6. **FCM token management** — Tokens can go stale if a user uninstalls the PWA or clears browser data. The `send-reminders.js` script auto-cleans invalid tokens, but there's no UI to re-subscribe.
-
-7. **UI/rules coupling** — The Remove button is hidden for entries older than 48h because Firestore security rules (published July 2026) block those deletes. If the rules' delete window changes, update the `48 * 3600000` constant in `removeBtn()` in index.html to match.
-
-8. **Timezone hardcoded** — The reminder system uses `America/Chicago` (Central Time). If the user moves timezone, both `send-reminders.js` and any time-display logic in `index.html` may need updating.
-
----
-
-## 11. Version History
-
-| Version | Date | Commit | Changes |
-|---|---|---|---|
-| v27 | Jul 13, 2026 | — | Today's missed-dose banner now includes yesterday's misses (labeled "Yesterday:"), so a late-evening miss isn't hidden after midnight. Journal/History rows unchanged (per-day) |
-| v26 | Jul 12, 2026 | — | Missed-dose alerts. Meds with `alerts:true` (protonix, buspirone, paroxetine, iron) are checked by `missedDosesFor(dayTs, now)`: each schedule window that has closed with no covering dose emits a `{missed:true, medId, ts: windowStart, windowName}` pseudo-entry. Coverage rule: any dose logged after the previous window closed and before this window closed counts (early logs covered). Rendered as: non-dismissible red banner atop Today, red `missedRow()` entries in Today's Journal buckets, red rows + "N MISSED" summaries in History. `MISSED_TRACK_SINCE` (Jul 12, 2026) prevents retroactive flags. As-needed meds are never flagged |
-| v25 | Jul 12, 2026 | — | Shared `timeBucket(ts)` groups entries as Overnight (0–6), Morning (6–12), Afternoon (12–17), Evening (17–24). Used by Today's Journal and now also by the History tab, which shows category label rows inside each day's card. Old "Night" category removed |
-| v24 | Jul 12, 2026 | — | Layout only: Protonix and Senokot pulled out of the group into individual Quick Log cards (window logic unchanged); group card renamed "Evening meds" and now contains exactly Buspirone, Paroxetine, Iron, Compazine; "Take all" counts only those four |
-| v23 | Jul 12, 2026 | — | Add Senokot (senna laxative): win-type med with morning (8–12) and night (22–24) windows, as-needed, no reminders. Scheduled-card Log/Log-early and the Take-all flow now pass a med's default `doses[0]` so entries record dose label and pill count |
-| v22 | Jul 12, 2026 | — | Dose buttons that would exceed the remaining daily ceiling are disabled (Tylenol mg, Imodium/Lidocaine counts); the red override path only remains once the ceiling is fully hit. Buspirone/Paroxetine/Iron moved to a 22–24 (10 PM) window. Compazine moved into the Scheduled Meds card (6h gap kept). "Take all (N)" button logs all currently-due scheduled meds in one time-modal. `isEarlyAt(med, ts)` now decides the Early tag from the logged timestamp instead of the lock state at click time (fixes false Early on backdated logs). |
-| v21 | Jul 11, 2026 | — | Tylenol ceiling 2500 mg (midnight reset, per care team); Protonix windows 8 AM & 8 PM; future-timestamp double-confirm in time modal; two-step delete confirmation, Remove hidden for entries >48h old (matches Firestore rules); window meds grouped into one "Scheduled Meds" card; ceiling counters render only if med used in last 7 days, Lidocaine counter added; all text colors darkened to WCAG AA 4.5:1 against the pink theme |
-| v20 | Jul 11, 2026 | — | Add Lidocaine topical cream (4h gap, max 4 applications/day, no reminders); generalize daily-count ceiling label; correct med table & Firestore field docs |
-| v19 | Jul 7, 2026 | 591a271 | Remove "Clear all" buttons, preserve history |
-| v18 | Jul 2, 2026 | 8f185cc | Add FCM push notifications + firebase-messaging-sw.js |
-| v17 | Jul 2, 2026 | c49adf3 | Remove Tylenol/Morphine/Imodium from reminders |
-| v16 | Jul 2, 2026 | b1fb779 | Add med reminder notifications |
-| v15 | Jul 2, 2026 | 3fdc571 | Light pink glassmorphism theme + fix sticky tabs |
-| v14 | Jul 1, 2026 | 84496d7 | Fix input focus loss on mobile during render cycle |
-| v13 | Jul 1, 2026 | 27852a4 | Bump SW cache to force refresh on all devices |
-| — | Jul 1, 2026 | 3b0060d | Add cache reset page for stuck service workers |
-| v12 | Jul 1, 2026 | a537c86 | Fix apostrophe in warning strings |
-
----
-
-## 12. Quick Reference for Common Tasks
+## 11. Quick Reference for Common Tasks
 
 ### Add a new medication
-1. In `index.html`, find the medication definitions array/object
-2. Add a new entry with: `id`, `name`, `generic`, dosing rules (gap time, max dose, etc.)
-3. The Quick Log UI should auto-generate from the definitions
-4. If it needs reminders, update `send-reminders.js` to include it in the scheduled or gap-based checks
+1. Add an entry to the `MEDS` array in `index.html` with `id`, `name`, `sub`, dosing rules.
+2. It appears in Quick Log automatically if `type === 'gap'` (and not `compazine`) or is explicitly
+   included in the Quick Log filter, or in the Evening meds group if added to that id list.
+3. If it needs missed-dose tracking, add `alerts: true` and a `windows` array.
+4. No reminder system exists in this repo to wire up — that only applies to prod.
 
-### Change a reminder time
-1. Edit `send-reminders.js`, find the `sendReminders()` function
-2. Adjust the `hour` and `minute` conditions for the target reminder
-3. Push to `main` — the GitHub Actions cron will pick it up on next run
+### Bump the version
+1. Check the **actual pushed** `care-tracker` (prod) repo for its current live version.
+2. This repo's new version = that number + 1 (or +1 again if testing is already ahead and adding
+   more changes before prod catches up).
+3. Update `sw.js`'s `CACHE` constant and both `README.md`/`CARETRACKER_HANDOFF.md`.
 
-### Force all devices to update
-1. In `sw.js`, change `const CACHE = 'caretracker-v19';` to the next version number
-2. Push to `main`
-3. For devices that are still stuck, have them visit the reset page
+### Debug the live testing app
+1. Open the testing URL in Chrome, DevTools → Console for errors.
+2. DevTools → Application → Service Workers to check SW status (`caretracker-testing-vN`).
+3. Confirm the orange "🧪 Testing app" banner is visible — if it's missing, `TEST_MODE` may have been
+   accidentally flipped, which is a serious bug (would point this app at prod's collection).
+4. Look for the "Live sync" indicator in the header for Firestore connectivity.
 
-### Check if reminders are working
-1. Go to https://github.com/arnjnnngs/care-tracker/actions
-2. Look at the "Send Med Reminders" workflow runs
-3. Click into a run to see console output (sent count, skipped reasons, etc.)
+## 12. Keeping These Docs Updated
 
-### Debug the live app
-1. Open https://arnjnnngs.github.io/care-tracker/ in Chrome
-2. DevTools → Console for JavaScript errors
-3. DevTools → Application → Service Workers to check SW status
-4. DevTools → Network to verify Firestore connections
-5. Look for the green "Live sync" indicator in the app header
-
----
-
-## 13. Notes from Latest Diagnostic (July 11, 2026)
-
-A report of "all blank" on a device was investigated. Loading the app in a fresh Chrome tab showed:
-- **All 13 network requests returned HTTP 200** (no failures)
-- **Zero console errors**
-- **Firebase Firestore listener connected successfully** to `fuelforge-7c132`
-- **All fonts loaded**, manifest loaded, icons loaded
-- **The app rendered fully** with all data visible
-
-**Conclusion:** The blank-screen issue is device-specific, likely a stale service worker cache. The reset page (`reset.html`) or clearing site data on the affected device should resolve it.
-
----
-
-## 14. Keeping These Docs Updated
-
-**IMPORTANT: When you make any changes to CareTracker, update both documentation files in the same commit.**
-
-### What to update in README.md:
-- Add a new row to the **Version History** table
-- Revise any sections affected by the change (Tracked Medications, Service Worker Strategy, Push Notification Reminders, Project Structure, etc.)
-
-### What to update in CARETRACKER_HANDOFF.md (this file):
-- Change the **"Last updated"** date and **"Current version"** at the top of this document
-- Add a new row to the **Version History** table (Section 11)
-- Revise any affected sections: medication definitions (Section 6), Firebase collections (Section 5), reminder schedule (Section 8), service worker details (Section 7), known issues (Section 10), etc.
-- If you added a new file, update the **Repository Structure** (Section 3)
-
-### Why this matters:
-These two files are the single source of truth for onboarding new contributors or AI agents to this project. Stale documentation leads to incorrect assumptions and wasted debugging time. Treat doc updates as part of the feature — not a follow-up task.
+**When you make any change to this repo, update `CLAUDE.md`, `README.md`, and this file in the same
+pass.** Specifically here: bump "Last updated" / "Current version" above, add a row to Section 10's
+pointer target (README's table), and revise any of Sections 4–9 that the change affects. Stale docs
+in this exact repo have already caused real confusion once (see Known Issues #1) — don't let it
+happen again.
