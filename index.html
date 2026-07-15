@@ -189,6 +189,7 @@ const MISSED_TRACK_SINCE = new Date(2026, 6, 12).getTime(); // Jul 12, 2026 — 
 function missedDosesFor(dayTs, now) {
   const d0 = dayStart(dayTs);
   if (d0 < dayStart(MISSED_TRACK_SINCE)) return [];
+  if (isInpatientDay(d0)) return []; // meds given by hospital staff that day — not tracked here
   const out = [];
   MEDS.filter(m => m.alerts && m.windows).forEach(med => {
     if (med.chemoOnly && !dexActiveOn(d0)) return;
@@ -301,7 +302,7 @@ async function logMed(medId, dose, opts) {
 
 function tempDefault() { return CONFIG.tempUnit === 'Celsius' ? '36.9' : '98.5'; }
 async function logTemp() {
-  const raw = (state.tempInput || '').trim() || tempDefault();
+  const raw = (state.tempInput || '').trim();
   const v = parseFloat(raw);
   if (!raw || isNaN(v) || v <= 0 || v > 120) { setToast('Enter a valid temperature'); return; }
   setState({ timeModal: { type: 'temp', tempValue: v, timeValue: nowLocalISO() } });
@@ -320,7 +321,7 @@ async function setChemoDate() {
 
 function weightDefault() { const lw = latest('weight'); return lw ? String(lw.weight) : ''; }
 async function logWeight() {
-  const raw = (state.weightInput || '').trim() || weightDefault();
+  const raw = (state.weightInput || '').trim();
   const v = parseFloat(raw);
   if (!raw || isNaN(v) || v <= 0 || v > 999) { setToast('Enter a valid weight'); return; }
   setState({ timeModal: { type: 'weight', weightValue: v, timeValue: nowLocalISO() } });
@@ -335,6 +336,7 @@ async function confirmTimeAndLog() {
 
   if (m.type === 'med') {
     const med = MEDS.find(x => x.id === m.medId);
+    if (med.painScale && !m.painLevel) { setToast('Select a pain level before logging ' + med.name); return; }
     const entry = { medId: m.medId, dose: m.dose ? m.dose.label : null, mg: m.dose ? (m.dose.mg || 0) : 0, ts };
     if (m.dose && m.dose.pills) entry.pills = m.dose.pills;
     if (med.painScale && m.painLevel) entry.painLevel = m.painLevel;
@@ -424,10 +426,11 @@ async function logCycleEnd() { await addEntryDB({ medId: 'cycle_end', dose: null
 
 // ---- In-Patient (hospital) day tracking ----
 // One tap marks/unmarks TODAY as an in-patient day. History groups consecutive days into ranges.
-function isInpatientToday() {
-  const d0 = dayStart(state.now);
+function isInpatientDay(ts) {
+  const d0 = dayStart(ts);
   return state.entries.some(e => e.medId === 'inpatient' && dayStart(e.ts) === d0);
 }
+function isInpatientToday() { return isInpatientDay(state.now); }
 async function toggleInpatientToday() {
   const d0 = dayStart(state.now);
   const existing = state.entries.find(e => e.medId === 'inpatient' && dayStart(e.ts) === d0);
@@ -665,6 +668,19 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     ));
   }
 
+  // Menstrual Cycle active banner — non-dismissible, stays up until Period End is logged
+  if (cycleActive()) {
+    const cDayN = daysSinceCycleStart();
+    parts.push(h('div', { style: { background: 'rgba(212,104,138,0.14)', border: '2px solid #AA5375', borderRadius: '16px', padding: '15px 16px', display: 'flex', gap: '12px', alignItems: 'center', boxShadow: '0 4px 24px rgba(212,104,138,0.2)' } },
+      h('span', { style: { flexShrink: '0', width: '28px', height: '28px', borderRadius: '50%', background: '#AA5375', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '15px' } }, '●'),
+      h('div', { style: { flex: '1' } },
+        h('div', { style: { fontWeight: '800', color: '#AA5375', fontSize: '15.5px', letterSpacing: '0.02em', marginBottom: '4px', textTransform: 'uppercase' } }, 'Period Active'),
+        h('div', { style: { color: '#8A3D66', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } }, cDayN !== null ? ('Day ' + cDayN + ' since period start') : 'Period in progress')
+      ),
+      h('button', { onClick: logCycleEnd, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, 'Log Period End')
+    ));
+  }
+
   // Demo banner
   if (state.demo) {
     parts.push(h('div', { style: { background: 'rgba(212,104,138,0.08)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '16px', padding: '12px 14px', display: 'flex', gap: '12px', alignItems: 'center', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5)' } },
@@ -765,7 +781,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         lastTemp ? h('div', { className: 'mono', style: { fontSize: '22px', fontWeight: '600', letterSpacing: '-0.02em', color: tempColor, whiteSpace: 'nowrap' } }, lastTemp.temp + tempSuffix()) : null
       ),
       h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', value: state.tempInput !== '' ? state.tempInput : tempDefault(), onInput: (e) => { state.tempInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
+        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: tempDefault(), value: state.tempInput, onInput: (e) => { state.tempInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
         h('button', { onClick: logTemp, style: { flexShrink: '0', minHeight: '52px', padding: '0 18px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700' } }, 'Log')
       )
     ),
@@ -779,7 +795,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         lastWeight ? h('div', { className: 'mono', style: { fontSize: '22px', fontWeight: '600', letterSpacing: '-0.02em', color: '#3D2B3A', whiteSpace: 'nowrap' } }, lastWeight.weight + ' lbs') : null
       ),
       h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: '156.0', value: state.weightInput !== '' ? state.weightInput : weightDefault(), onInput: (e) => { state.weightInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
+        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: weightDefault() || '156.0', value: state.weightInput, onInput: (e) => { state.weightInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
         h('button', { onClick: logWeight, style: { flexShrink: '0', minHeight: '52px', padding: '0 18px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700' } }, 'Log')
       )
     )

@@ -11,8 +11,8 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 14, 2026
-> **Current version:** v29 (see README.md's versioning convention — this repo's version is always
+> **Last updated:** July 15, 2026
+> **Current version:** v30 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
@@ -81,7 +81,7 @@ Each document is one logged event. Fields actually written by this app's code:
 - `pills` — pill/application count, only present when relevant
 - `temp` / `weight` — numeric value on vitals entries
 - `override` — boolean, present when logged early past a lock
-- `painLevel` — integer 1–10, present only on Morphine or Tylenol doses where a level was selected (new in v29; Tylenol added same day as Morphine)
+- `painLevel` — integer 1–10, present on Morphine and Tylenol doses (new in v29). **As of v30 this is required** — `confirmTimeAndLog()` rejects the log with a toast (`Select a pain level before logging <med>`) if `m.painLevel` is unset for a `painScale` med, so any entry for these two meds is guaranteed to carry a level.
 - `loggedAt` — present on `chemo_date` records; used to find the most recently *set* chemo date (the
   record's own `ts` is the chemo date itself, which can be in the future)
 
@@ -96,10 +96,10 @@ Production's real collection. **This app must never write here.**
 | ID | Display Name | Rules |
 |---|---|---|
 | `dexamethasone` | Dexamethasone | `chemoOnly: true` — only appears in Quick Log when `dexActiveOn(day)` (day −1 to +1 relative to chemo date). 2 tablets, 8 AM & 2 PM windows. Missed-dose tracked. |
-| `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29)** — same 1–10 "Pain level" dropdown as Morphine |
+| `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29), required as of v30** — same 1–10 "Pain level" dropdown as Morphine; Confirm is blocked until a level is chosen |
 | `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–1 via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
 | `compazine` | Compazine | 6h min gap, shown in Evening meds card |
-| `morphine` | Morphine | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg). **`painScale: true` (v29)** — time modal shows a 1–10 "Pain level" dropdown (`Not recorded` is a valid choice); stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field (see above) |
+| `morphine` | Morphine | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg). **`painScale: true` (v29), required as of v30** — time modal shows a 1–10 "Pain level" dropdown; `Not recorded` (blank) is no longer a valid choice for Confirm, `confirmTimeAndLog()` rejects the submission otherwise. Stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field/requirement (see above) |
 | `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
 | `imodium` | Imodium | Daily limit 4 pills |
 | `protonix` | Protonix | Windows 8 AM–noon & 8–10 PM, missed-dose tracked |
@@ -107,8 +107,16 @@ Production's real collection. **This app must never write here.**
 | `senokot` | Senokot | As-needed, 8 AM & 10 PM windows |
 
 ### Vitals
-- **Temperature** — °F. Input **defaults to `98.5`** (`tempDefault()`, v29) instead of a blank field; user can overwrite before logging.
-- **Weight** — lbs. Input **defaults to the last recorded weight** (`weightDefault()`, v29); falls back to empty if none logged yet.
+- **Temperature** — °F. Input shows `tempDefault()` (`98.5`) as an HTML `placeholder` (grayed hint
+  text only) — **the actual `value` is always `state.tempInput`, never auto-filled** (reverted in
+  v30 after v29 briefly made it a real auto-submitted default, which risked silently logging a
+  value the user never entered). `logTemp()` validates only the raw typed input; an empty field is
+  rejected with a toast, not defaulted.
+- **Weight** — lbs. Input shows `weightDefault()` (the last recorded weight, or `'156.0'` if none
+  logged yet) as a `placeholder` only — same rule as Temperature: `value` is always
+  `state.weightInput`, `logWeight()` rejects an empty field rather than silently using the last
+  weight (fixed in v30; this was the same underlying bug as Temperature's, just not initially
+  reported for Weight).
 
 ### Chemo cycle
 - `nextChemoTs()` reads the most recently-set (`loggedAt`) `chemo_date` record; `ts: 0` means cleared.
@@ -122,15 +130,25 @@ Protonix, Buspirone, Paroxetine, Iron). A window counts as covered by any dose l
 previous window closed and before this one closes (so early logs count). Tracking starts
 `MISSED_TRACK_SINCE` = Jul 12, 2026. Rendered as a non-dismissible red Today banner (today +
 yesterday's misses), red rows in Today's Journal, and red rows + "N MISSED" summaries in History.
+**As of v30, `missedDosesFor(dayTs, now)` returns `[]` immediately if `isInpatientDay(dayTs)` is
+true** — a day marked In-Patient is fully excluded from missed-dose detection everywhere (Today
+banner, Journal, History), since meds given by hospital staff that day aren't tracked by this app.
+This is per-day: marking *today* in-patient doesn't suppress a genuine miss from *yesterday* still
+showing in the Today banner's rollover section, and vice versa.
 
-### Menstrual cycle (v29)
+### Menstrual cycle (v29; Today banner added v30)
 - `cycleEntries()` / `cycleActive()` — active whenever the most recent of `cycle_start`/`cycle_end` is a start.
 - `daysSinceCycleStart()` — `dayStart(now) - dayStart(lastStart.ts)`, in days, +1 (start day = Day 1).
 - `logCycleStart()` / `logCycleEnd()` — instant one-tap writes at `Date.now()`, **no time picker by design**.
-- UI: a card at the top of the Weight tab with an "Active" badge and a single context-sensitive button ("Log Period Start" / "Log Period End").
+- UI (Weight tab): a card at the top with an "Active" badge and a single context-sensitive button ("Log Period Start" / "Log Period End").
+- UI (Today tab, v30): whenever `cycleActive()` is true, a **non-dismissible** "Period Active"
+  banner renders near the top of the Today (home) screen — no close/dismiss control exists on it by
+  design, it only goes away once `logCycleEnd()` is called (either from this banner's own "Log
+  Period End" button, or from the Weight tab's card — both write the same `cycle_end` event).
 
-### In-Patient day tracking (v29)
-- `isInpatientToday()` — true if any `inpatient` entry's day matches today.
+### In-Patient day tracking (v29; missed-dose suppression added v30)
+- `isInpatientDay(ts)` (v30) — true if any `inpatient` entry's day matches the day containing `ts`.
+  `isInpatientToday()` is now just `isInpatientDay(state.now)`.
 - `toggleInpatientToday()` — adds an `inpatient` entry at `Date.now()` if not marked, or deletes today's `inpatient` entry if already marked ("Undo"). Always uses real time, not a picker.
 - `inpatientRanges()` — collects distinct in-patient calendar days, sorts, and merges any two days exactly 86,400,000 ms apart into a `{start, end}` range; returned most-recent-first.
 - `fmtInpatientRange()` — single day → `M/D/YYYY`; multi-day → `M/D/YYYY – M/D/YYYY (N days)`.

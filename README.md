@@ -27,6 +27,7 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v30 | Jul 15, 2026 | v29 | Tylenol/Morphine now require a pain level (1–10) before the dose can be confirmed — Confirm is rejected with a toast if none is selected. Temperature and Weight inputs went back to true placeholders (grayed hint text — 98.5 / last recorded weight) instead of pre-filled values, so an untouched field can no longer be accidentally logged; both now require the user to type a value. Added a non-dismissible "Period Active" banner to the Today (home) screen that stays up for the whole cycle, from Period Start until Period End is logged, with a one-tap Log Period End button on the banner itself. Marking a day In-Patient now hides that day's missed-dose alerts everywhere (Today banner, Journal, History) — meds given by hospital staff aren't tracked by this app, so they shouldn't be flagged as missed. | Testing |
 | v29 | Jul 14, 2026 | v28 | Menstrual cycle tracking (Period Start/End one-tap logging, no time picker, "Day N since last period" counter, Active badge — on the Weight tab). In-Patient day tracking (one-tap toggle banner at the top of Today, new In-Patient tab grouping consecutive hospital days into date ranges, e.g. `7/13/2026` alone or `7/13/2026 – 7/14/2026 (2 days)`). Weight input now defaults to the last recorded weight; Temperature input now defaults to 98.5°F. Added a 1–10 pain-level dropdown to Morphine and Tylenol logging, shown in Today's Journal and History. Zofran changed from an 8-hour gap timer to a plain as-needed med — no lock, no scheduled or gap-based reminder (the chemo-day clinical block is unchanged). New `cycle_start`, `cycle_end`, and `inpatient` entry types; `inpatient` entries excluded from Today's Journal and History's per-day rows/counts entirely (they have their own tab); `cycle_start`/`cycle_end` still show as History rows but are excluded from the day's dose count. | Testing |
 | v28 | Jul 13, 2026 | v27 | *(retroactively renumbered from "t1" to match the new versioning convention below — no functional change)* Chemo cycle: chemo date scheduling, Dexamethasone auto-appearing med (2 tablets, 8 AM & 2 PM, day before chemo through day after), Zofran locked on chemo days 1–2 with override (superseded in v29 — see above), phased red chemo banners (day −2 through +1), missed-dose alert system | Testing |
 
@@ -94,7 +95,7 @@ gap-based push reminder system that exists in production does not run here at al
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v29` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v30` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
@@ -103,10 +104,10 @@ gap-based push reminder system that exists in production does not run here at al
 | Medication | Generic | Tracking Type |
 |---|---|---|
 | Dexamethasone | Steroid, chemo premed | 2 tablets, 8 AM & 2 PM, only appears day before chemo through day after (chemoOnly) |
-| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses. **1–10 pain-level dropdown captured at log time (v29)** |
+| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses. **1–10 pain-level required at log time (v29; enforced as required in v30)** |
 | Zofran | Ondansetron | **As-needed — no gap timer, no reminders** (changed in v29). Blocked on chemo days 1–2 with override, per care team |
 | Compazine | Prochlorperazine | 6h min gap; 10 PM routine + earlier as needed (in Evening meds card) |
-| Morphine | Immediate release | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg) doses. **1–10 pain-level dropdown captured at log time (v29)** |
+| Morphine | Immediate release | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg) doses. **1–10 pain-level required at log time (v29; enforced as required in v30)** |
 | Lidocaine | Topical cream | 4h min gap, max 4 applications per day |
 | Imodium | Loperamide | Daily pill count limit (4 pills) |
 | Protonix | Pantoprazole | Twice daily windows (8 AM–noon, 8–10 PM), missed-dose alerts |
@@ -121,7 +122,10 @@ Dexamethasone (chemo days only), Protonix, Buspirone, Paroxetine, and Iron are t
 doses. When a schedule window closes with no dose logged, the app shows a red alert banner at the
 top of Today (covering today's and yesterday's misses), a red MISSED row in Today's Journal, and red
 MISSED rows plus a "N MISSED" day summary in History. Tracking starts July 12, 2026. Zofran, Tylenol,
-Morphine, Lidocaine, Imodium, Compazine, and Senokot are as-needed and never flagged.
+Morphine, Lidocaine, Imodium, Compazine, and Senokot are as-needed and never flagged. **Any day marked
+In-Patient is fully excluded from missed-dose detection (v30)** — meds given by hospital staff on
+that day aren't tracked here, so nothing for that day is ever flagged as missed, on Today, in the
+Journal, or in History.
 
 ## Chemo Cycle
 
@@ -131,9 +135,9 @@ through +1, and Zofran is blocked on days 0–1 (override available if the care 
 
 ## Vitals, Cycle & In-Patient Tracking
 
-- **Temperature** — logged in °F with timestamp; input **defaults to 98.5°F** (v29)
-- **Weight** — logged in lbs with timestamp; input **defaults to the last recorded weight** (v29)
-- **Menstrual Cycle** — logged as two one-tap events, Period Start and Period End, from a card at the top of the Weight tab. Tapping logs immediately at the current time (no date/time picker). Shows a running "Day N" counter (days since the most recently logged period start) and an "Active" badge while a period is in progress.
+- **Temperature** — logged in °F with timestamp; input shows **98.5°F as a grayed placeholder** (v29/v30) — the user must still type a value; an untouched field is rejected, not silently logged
+- **Weight** — logged in lbs with timestamp; input shows **the last recorded weight as a grayed placeholder** (v29/v30) — same rule, must be typed to submit
+- **Menstrual Cycle** — logged as two one-tap events, Period Start and Period End, from a card at the top of the Weight tab. Tapping logs immediately at the current time (no date/time picker). Shows a running "Day N" counter (days since the most recently logged period start) and an "Active" badge while a period is in progress. **A non-dismissible "Period Active" banner also appears on the Today (home) screen for the whole cycle (v30)** — it has no close control and stays up until Period End is logged, with a one-tap Log Period End button right on the banner.
 - **In-Patient (hospital) days** — a toggle banner at the very top of the Today tab marks/unmarks the current day as in-patient (meds given by hospital staff, not logged here) with one tap. A dedicated **In-Patient** tab lists all marked days, merging consecutive days into a range (e.g. `7/13/2026` alone, or `7/13/2026 – 7/14/2026 (2 days)` once the next day is also marked).
 
 ## App Views
