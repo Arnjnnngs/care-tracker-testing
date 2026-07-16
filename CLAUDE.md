@@ -21,8 +21,11 @@ promoted to the app Brandi's caregiver actually relies on.
 2. **Never push to the production `care-tracker` repo's `main` branch without Aaron's explicit,
    in-the-moment go-ahead.** This applies even if a change looks trivial or was already approved for
    testing. Production and testing are promoted as a deliberate, separate step.
-3. **Ask before pushing to *this* repo too.** Build and QA changes locally/in-sandbox first; confirm
-   with Aaron that a change is ready before committing and pushing to `care-tracker-testing`.
+3. **Push to *this* repo (`care-tracker-testing`) directly once a change is built and QA'd —
+   no confirmation round-trip needed (per Aaron, Jul 16, 2026: "when I ask for changes, you can
+   push to testing only from now on... we'll cut down on the back and forth"). This is the one
+   exception to rule 2 — it applies ONLY to `care-tracker-testing`, never to production. Still
+   build and QA in the sandbox first; just don't wait for a go-ahead before pushing testing.
 4. **Never run real QA against live Firestore.** Use a mocked Firestore harness (in-memory store +
    pub/sub, matching the shape of `subscribeEntries`/`addEntryDB`/`removeEntryDB`) driven by jsdom or
    a real headless browser. Only manual, deliberate testing by a human should touch the actual
@@ -65,4 +68,5 @@ promoted to the app Brandi's caregiver actually relies on.
 4. Update `README.md`'s Version History table (new row, numbered per the versioning rule above)
    and `CARETRACKER_HANDOFF.md`.
 5. Bump the `sw.js` cache version.
-6. Ask Aaron for confirmation before committing/pushing to this repo's `main`.
+6. Push to this repo's `main` once built and QA'd — no confirmation needed for testing (see Hard
+   Rule 3). Production promotion always still needs Aaron's explicit go-ahead.

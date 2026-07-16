@@ -11,8 +11,8 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 15, 2026
-> **Current version:** v31 (see README.md's versioning convention — this repo's version is always
+> **Last updated:** July 16, 2026
+> **Current version:** v32 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
@@ -74,7 +74,7 @@ production, the scheduled/gap-based reminder cron system doesn't exist here at a
 ### `caretracker_test_entries` (this app's collection — `COL_NAME` when `TEST_MODE` is true)
 Each document is one logged event. Fields actually written by this app's code:
 
-- `medId` — `"dexamethasone" | "tylenol" | "zofran" | "compazine" | "morphine" | "lidocaine" | "imodium" | "protonix" | "buspirone" | "paroxetine" | "iron" | "senokot" | "temp" | "weight" | "chemo_date" | "cycle_start" | "cycle_end" | "inpatient"`
+- `medId` — `"dexamethasone" | "tylenol" | "zofran" | "compazine" | "morphine" | "lidocaine" | "imodium" | "protonix" | "buspirone" | "paroxetine" | "iron" | "senokot" | "temp" | "weight" | "chemo_date" | "cycle_start" | "cycle_end" | "inpatient_start" | "inpatient_end" | "inpatient"` (`inpatient` is the pre-v32 single-day marker, kept only for backward-compat reads of old data — new writes always use `inpatient_start`/`inpatient_end`)
 - `ts` — ms-since-epoch of the event
 - `dose` — human-readable label (e.g. `"1000 mg"`, `"½ tab · 7.5 mg"`) or `null`
 - `mg` — numeric mg (0 for non-mg entries)
@@ -85,7 +85,7 @@ Each document is one logged event. Fields actually written by this app's code:
 - `loggedAt` — present on `chemo_date` records; used to find the most recently *set* chemo date (the
   record's own `ts` is the chemo date itself, which can be in the future)
 
-`cycle_start` / `cycle_end` and `inpatient` records carry no special fields beyond the common ones —
+`cycle_start` / `cycle_end` and `inpatient_start` / `inpatient_end` records carry no special fields beyond the common ones —
 they're pure event markers, always logged at `Date.now()` (no time picker).
 
 ### `caretracker_entries`
@@ -136,19 +136,54 @@ banner, Journal, History), since meds given by hospital staff that day aren't tr
 This is per-day: marking *today* in-patient doesn't suppress a genuine miss from *yesterday* still
 showing in the Today banner's rollover section, and vice versa.
 
-### Menstrual cycle (v29; Today banner added v30)
+### Menstrual cycle (v29; Today banner added v30; own tab v32)
 - `cycleEntries()` / `cycleActive()` — active whenever the most recent of `cycle_start`/`cycle_end` is a start.
 - `daysSinceCycleStart()` — `dayStart(now) - dayStart(lastStart.ts)`, in days, +1 (start day = Day 1).
 - `logCycleStart()` / `logCycleEnd()` — instant one-tap writes at `Date.now()`, **no time picker by design**.
-- UI (Weight tab): a card at the top with an "Active" badge and a single context-sensitive button ("Log Period Start" / "Log Period End").
+- `cyclePeriods()` — pairs `cycle_start`/`cycle_end` chronologically into `{start, end}` periods
+  (`end: null` if still open); `fmtCyclePeriod()` formats each as `M/D/YYYY – Active` or
+  `M/D/YYYY – M/D/YYYY (N days)`.
+- UI (**Cycle** tab, v32 — moved off the Weight tab, sits between Weight and In-Patient in the tab
+  bar): a card at the top with an "Active" badge and a single context-sensitive button ("Log Period
+  Start" / "Log Period End"), plus a Cycle History list below it built from `cyclePeriods()`. The
+  underlying `cycle_start`/`cycle_end` event logic was **not touched** in the v32 move — only where
+  it renders changed.
 - UI (Today tab, v30): whenever `cycleActive()` is true, a **non-dismissible** "Period Active"
   banner renders near the top of the Today (home) screen — no close/dismiss control exists on it by
   design, it only goes away once `logCycleEnd()` is called (either from this banner's own "Log
-  Period End" button, or from the Weight tab's card — both write the same `cycle_end` event).
+  Period End" button, or from the Cycle tab's card — both write the same `cycle_end` event).
 
-### In-Patient day tracking (v29; missed-dose suppression added v30)
-- `isInpatientDay(ts)` (v30) — true if any `inpatient` entry's day matches the day containing `ts`.
-  `isInpatientToday()` is now just `isInpatientDay(state.now)`.
+### In-Patient tracking (v29; missed-dose suppression v30; Start/End/Undo redesign v32)
+As of v32 this is a **paired start/end event model**, mirroring the menstrual cycle, replacing the
+original single daily toggle marker:
+- `inpatientEntries()` / `inpatientPeriods()` — pairs `inpatient_start`/`inpatient_end` chronologically
+  into `{start, end, startId, endId}` periods (`end: null` + `endId: null` if still open), most-recent-first.
+- `currentInpatientPeriod()` / `isInpatientActiveNow()` — the open period (if any) / whether one exists.
+- `daysSinceInpatientStart()` — `dayStart(now) - dayStart(open.start)`, in days, +1 (start day = Day 1).
+- `logInpatientStart()` / `logInpatientEnd()` — instant one-tap writes at `simNow()`, each fires a
+  confirmation toast ("In-Patient started — meds now show as Restricted" / "In-Patient ended").
+- `undoInpatientStart()` — **two-tap confirm.** First tap sets `state.confirmUndoInpatient = true`,
+  shows a "Tap Undo again to remove this In-Patient entry" toast, and starts a 5-second timer that
+  resets the flag if not confirmed. Second tap (while the flag is set) deletes the open period's
+  `inpatient_start` doc via `removeEntryDB(cur.startId)` and shows a removal-confirmed toast. This is
+  specifically for undoing an accidental Start — closing a real stay should use End, not Undo.
+- `isInpatientDay(ts)` — true if the day containing `ts` overlaps any period in `inpatientPeriods()`
+  (open periods count as covering every day from their start through "now"), **or** if a legacy
+  pre-v32 `inpatient` single-day marker exists on that day (kept for backward-compat with old test
+  data, never written going forward). Feeds `missedDosesFor()`'s suppression check unchanged from v30.
+- `fmtInpatientDateTime()` — `M/D/YYYY h:mm AM/PM`. `fmtInpatientPeriod()` — single period →
+  `<start> – Active` or `<start> – <end> (N days)`, using real timestamps so a same-day stay of a
+  few hours still shows correctly (half-day precision) instead of collapsing into a single date.
+- UI (**In-Patient** tab): a Start/End/Undo card at the top (Log In-Patient Start when inactive; Log
+  In-Patient End + Undo side-by-side when active, Undo relabeling to "Tap to confirm" mid-flow) plus
+  an In-Patient History list below it built from `inpatientPeriods()`.
+- UI (Today tab, v32): whenever `isInpatientActiveNow()` is true, a **non-dismissible, pinned**
+  "In-Patient Active" banner renders at the top of Today with its own Log In-Patient End button — no
+  close/dismiss control by design, same pattern as the Period Active banner.
+- UI (Quick Log + Evening meds, v32): while `isInpatientActiveNow()` is true, every med card in both
+  sections renders as `<Med Name> - In-Patient (Restricted)` with a "Given by hospital staff — not
+  logged in this app" note, replacing all normal logging controls; the Evening meds "Take all" button
+  is also hidden. This only affects display/interaction — no entries are written for restricted meds.
 
 ### Testing-only date override (v31)
 This is the mechanism that makes the whole "wait for a real day to pass" problem go away during
@@ -159,9 +194,10 @@ manual testing:
   plain `Date.now()` unconditionally when `TEST_MODE` is false. **Every other function that used to
   call `Date.now()` for an actual event timestamp or "now" comparison was switched to `simNow()`**:
   `nowLocalISO()` (time-modal default), the future-timestamp check in `confirmTimeAndLog()`,
-  `seedDemo()`, `logCycleStart()`/`logCycleEnd()`, `toggleInpatientToday()`, and the 1-second
-  `setInterval` that drives `state.now`. `chemo_date`'s `loggedAt` audit field intentionally still
-  uses real `Date.now()` (see below).
+  `seedDemo()`, `logCycleStart()`/`logCycleEnd()`, `logInpatientStart()`/`logInpatientEnd()`
+  (v32 — the old `toggleInpatientToday()` this replaced also used it), and the 1-second `setInterval`
+  that drives `state.now`. `chemo_date`'s `loggedAt` audit field intentionally still uses real
+  `Date.now()` (see below).
 - `setSimDate(dateStr)` — takes a `YYYY-MM-DD` string from the header's date input, computes the day
   offset from the real calendar date, and stores it in `state.dateOffsetDays`.
 - `shiftSimDate(days)` — adds/subtracts whole days from the current offset (powers the header's
@@ -187,16 +223,9 @@ manual testing:
 - **Production safety:** confirmed via a dedicated QA pass that re-runs the whole app with
   `TEST_MODE` forced to `false` — the header control doesn't render, and `shiftSimDate()`/
   `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
-- `toggleInpatientToday()` — adds an `inpatient` entry at `Date.now()` if not marked, or deletes today's `inpatient` entry if already marked ("Undo"). Always uses real time, not a picker.
-- `inpatientRanges()` — collects distinct in-patient calendar days, sorts, and merges any two days exactly 86,400,000 ms apart into a `{start, end}` range; returned most-recent-first.
-- `fmtInpatientRange()` — single day → `M/D/YYYY`; multi-day → `M/D/YYYY – M/D/YYYY (N days)`.
-- UI: a toggle banner at the very top of the Today tab (above the missed-dose banner), and a 4th
-  "In-Patient" tab listing the ranges. `inpatient` entries are excluded entirely from Today's
-  Journal and History's day rows/dose counts (they're not timestamped medical events).
-
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v29` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v32` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
