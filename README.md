@@ -10,6 +10,13 @@ notifications are disabled (`TEST_MODE = true` short-circuits `subscribePush()` 
 this repo — most importantly: never point this app at the real `caretracker_entries` collection, and
 never push here (or to prod) without asking first.
 
+**Testing-only date override:** at the top of the header (visible on every tab) there's a date
+picker plus ± 1 Day buttons and a "Reset to Today" button. Use it to simulate any date without
+waiting for real time to pass — every date-dependent feature (chemo offsets, missed-dose windows,
+the cycle day counter, in-patient date ranges, and the timestamp on anything you log while the
+override is active) respects the simulated date. This control only exists and only functions when
+`TEST_MODE` is true — it's a no-op with no UI in production.
+
 ---
 
 ## Versioning (matches production, offset ahead)
@@ -27,6 +34,7 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v31 | Jul 15, 2026 | v30 | Added a **testing-only date override** at the top of the header (every tab, TEST_MODE-gated): pick any date, or step ± 1 day, to simulate a different "today" without waiting for real time to pass — a "Reset to Today" button appears whenever the offset isn't zero. All date-dependent logic (chemo offsets, missed-dose windows, the cycle day counter, in-patient ranges, and the timestamp on every newly-logged entry) now flows through a single `simNow()` helper instead of `Date.now()`, so everything stays internally consistent while a simulated date is active. `simNow()` returns real `Date.now()` whenever `TEST_MODE` is false, so this has zero effect if ever copied into production. | Testing |
 | v30 | Jul 15, 2026 | v29 | Tylenol/Morphine now require a pain level (1–10) before the dose can be confirmed — Confirm is rejected with a toast if none is selected. Temperature and Weight inputs went back to true placeholders (grayed hint text — 98.5 / last recorded weight) instead of pre-filled values, so an untouched field can no longer be accidentally logged; both now require the user to type a value. Added a non-dismissible "Period Active" banner to the Today (home) screen that stays up for the whole cycle, from Period Start until Period End is logged, with a one-tap Log Period End button on the banner itself. Marking a day In-Patient now hides that day's missed-dose alerts everywhere (Today banner, Journal, History) — meds given by hospital staff aren't tracked by this app, so they shouldn't be flagged as missed. | Testing |
 | v29 | Jul 14, 2026 | v28 | Menstrual cycle tracking (Period Start/End one-tap logging, no time picker, "Day N since last period" counter, Active badge — on the Weight tab). In-Patient day tracking (one-tap toggle banner at the top of Today, new In-Patient tab grouping consecutive hospital days into date ranges, e.g. `7/13/2026` alone or `7/13/2026 – 7/14/2026 (2 days)`). Weight input now defaults to the last recorded weight; Temperature input now defaults to 98.5°F. Added a 1–10 pain-level dropdown to Morphine and Tylenol logging, shown in Today's Journal and History. Zofran changed from an 8-hour gap timer to a plain as-needed med — no lock, no scheduled or gap-based reminder (the chemo-day clinical block is unchanged). New `cycle_start`, `cycle_end`, and `inpatient` entry types; `inpatient` entries excluded from Today's Journal and History's per-day rows/counts entirely (they have their own tab); `cycle_start`/`cycle_end` still show as History rows but are excluded from the day's dose count. | Testing |
 | v28 | Jul 13, 2026 | v27 | *(retroactively renumbered from "t1" to match the new versioning convention below — no functional change)* Chemo cycle: chemo date scheduling, Dexamethasone auto-appearing med (2 tablets, 8 AM & 2 PM, day before chemo through day after), Zofran locked on chemo days 1–2 with override (superseded in v29 — see above), phased red chemo banners (day −2 through +1), missed-dose alert system | Testing |
@@ -95,7 +103,7 @@ gap-based push reminder system that exists in production does not run here at al
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v30` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v31` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 

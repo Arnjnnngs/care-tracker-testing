@@ -12,7 +12,7 @@
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 15, 2026
-> **Current version:** v30 (see README.md's versioning convention — this repo's version is always
+> **Current version:** v31 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
@@ -149,6 +149,44 @@ showing in the Today banner's rollover section, and vice versa.
 ### In-Patient day tracking (v29; missed-dose suppression added v30)
 - `isInpatientDay(ts)` (v30) — true if any `inpatient` entry's day matches the day containing `ts`.
   `isInpatientToday()` is now just `isInpatientDay(state.now)`.
+
+### Testing-only date override (v31)
+This is the mechanism that makes the whole "wait for a real day to pass" problem go away during
+manual testing:
+
+- `simNow()` — the single source of truth for "what time is it right now" everywhere in the app.
+  Returns `Date.now() + state.dateOffsetDays * 86400000` when `TEST_MODE` is true, and returns
+  plain `Date.now()` unconditionally when `TEST_MODE` is false. **Every other function that used to
+  call `Date.now()` for an actual event timestamp or "now" comparison was switched to `simNow()`**:
+  `nowLocalISO()` (time-modal default), the future-timestamp check in `confirmTimeAndLog()`,
+  `seedDemo()`, `logCycleStart()`/`logCycleEnd()`, `toggleInpatientToday()`, and the 1-second
+  `setInterval` that drives `state.now`. `chemo_date`'s `loggedAt` audit field intentionally still
+  uses real `Date.now()` (see below).
+- `setSimDate(dateStr)` — takes a `YYYY-MM-DD` string from the header's date input, computes the day
+  offset from the real calendar date, and stores it in `state.dateOffsetDays`.
+- `shiftSimDate(days)` — adds/subtracts whole days from the current offset (powers the header's
+  "− 1 Day" / "+ 1 Day" buttons).
+- `resetSimDate()` — zeroes the offset, snapping back to real time.
+- **Ordering gotcha:** all three setter functions mutate `state.dateOffsetDays` directly *before*
+  calling `setState({ now: simNow() })`, rather than putting `dateOffsetDays` and `now: simNow()` in
+  the same `setState()` patch object. If you refactor this, keep that ordering — `simNow()` reads
+  `state.dateOffsetDays` at the moment it's called, and object-literal properties in a single
+  `setState()` call are evaluated before `Object.assign` applies any of them, so putting both in one
+  patch call would make `now` reflect the *previous* offset, one step behind. This was a real bug
+  caught by the QA harness during development.
+- **Why `loggedAt` on `chemo_date` records stays on real `Date.now()`:** that field is pure
+  creation-order bookkeeping (`nextChemoTs()` picks the record with the highest `loggedAt`), not a
+  simulated event time. If it used `simNow()` instead, jumping the simulated date backward after
+  previously setting a chemo date at a later simulated date could make an older record look newer,
+  breaking that ordering. The chemo date itself (`ts`, picked from the date input) is unaffected
+  either way — it was never derived from "now".
+- UI: a dashed-border amber panel at the top of the header, below the orange "🧪 Testing app" banner,
+  visible on every tab (not just Today) since the picker affects Weight/History/In-Patient views
+  too. Only rendered when `TEST_MODE` is true. Shows a "+N days from real today" label whenever the
+  offset isn't zero.
+- **Production safety:** confirmed via a dedicated QA pass that re-runs the whole app with
+  `TEST_MODE` forced to `false` — the header control doesn't render, and `shiftSimDate()`/
+  `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
 - `toggleInpatientToday()` — adds an `inpatient` entry at `Date.now()` if not marked, or deletes today's `inpatient` entry if already marked ("Undo"). Always uses real time, not a picker.
 - `inpatientRanges()` — collects distinct in-patient calendar days, sorts, and merges any two days exactly 86,400,000 ms apart into a `{start, end}` range; returned most-recent-first.
 - `fmtInpatientRange()` — single day → `M/D/YYYY`; multi-day → `M/D/YYYY – M/D/YYYY (N days)`.
