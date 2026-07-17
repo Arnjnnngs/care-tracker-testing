@@ -273,6 +273,16 @@ See README.md's **Testing Version History** table for the authoritative, dated l
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter).
 
+## Known Issues (Fixed)
+
+### seedDemo() fake-data bug (fixed v33, Jul 17, 2026)
+
+A dormant `seedDemo()` function fired whenever the app's first Firestore snapshot returned empty entries — intended only for a genuinely fresh install, but cold caches and brief network blips produce the same "empty" signal, so it could fire unpredictably during real usage. It silently wrote 11 hardcoded fake medication entries per trigger. The identical function existed in production `care-tracker` (introduced early in that repo's history, before this testing repo existed) and had already written fake entries into Brandi's real medical data before it was caught — see production's Known Issues section for the full incident. This repo's copy never reached `caretracker_entries` (confirmed via a `TEST_MODE`/`COL_NAME` routing audit) but did pollute `caretracker_test_entries` with the same pattern.
+
+**Fix:** the trigger condition was changed to `if (false && wasEmpty && entries.length === 0)`, permanently disabling the call without deleting the dead function body (left as unreachable code, flagged for an optional future cleanup pass). All 11 fake entries were identified by matching their timestamps against `seedDemo()`'s known hour-offsets from a single trigger time, deleted via the Firebase Console's admin Data browser, and the collection was re-queried to confirm zero remain.
+
+**Lesson for future fixture/demo-data functions:** never gate a write on "the collection looks empty" as a proxy for "this is the user's first real launch." A cold local cache or a dropped network request looks identical to genuine emptiness from the client's point of view. If a demo-seeding feature is ever wanted again, it should require an explicit user action (a button), not fire automatically off a snapshot listener.
+
 ## 11. Quick Reference for Common Tasks
 
 ### Add a new medication
