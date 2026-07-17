@@ -11,8 +11,8 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 16, 2026
-> **Current version:** v32 (see README.md's versioning convention — this repo's version is always
+> **Last updated:** July 17, 2026
+> **Current version:** v33 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
