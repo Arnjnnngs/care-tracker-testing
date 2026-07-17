@@ -1562,7 +1562,7 @@ unsub = subscribeEntries((entries) => {
   }
   setState({ entries, loaded: true });
   // If first load and no entries, offer to seed demo data
-  if (wasEmpty && entries.length === 0) {
+  if (false && wasEmpty && entries.length === 0) {
     seedDemo();
   }
 });
