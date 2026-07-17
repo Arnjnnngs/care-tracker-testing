@@ -57,6 +57,24 @@ promoted to the app Brandi's caregiver actually relies on.
   touched. Service worker cache name here is `caretracker-testing-vN` using that same number
   (e.g. `caretracker-testing-v29`), not a separate testing-only counter.
 
+## GitHub web-editor cautions (learned Jul 17, 2026)
+
+This repo's docs get edited via GitHub's web editor (Find & Replace panel), since the sandbox has no git push credentials. Failure modes that have bitten us here — know them before editing:
+
+**Ctrl+A can wipe the whole file.** If focus isn't actually in the Find/Replace field when you press Ctrl+A, it selects the entire document body instead. Always confirm via screenshot which element has focus before using Ctrl+A or Delete. Triple-click to select existing field text instead of a blind Ctrl+A.
+
+**Multi-line Replace-field content silently truncates.** Typing or pasting a replacement with several embedded newlines (e.g. a multi-paragraph section) into the Replace field only applies the first line/fragment — the rest is silently dropped, with no error shown. Single-line edits are unaffected.
+
+**Multi-line Find patterns can silently match zero results.** Combining two edits into one Find string with an embedded newline can fail to match anything, with Replace All doing nothing and no error shown. Split into separate single-line Find/Replace operations instead.
+
+**The editor auto-continues markdown numbered/bulleted lists.** Typing a line that starts with a digit-dot-space (e.g. "1. ") and then pressing Enter makes the editor auto-insert the next number on the following line — so directly typing your own pre-numbered list corrupts it with duplicated markers (e.g. "2. 2. text"), and can even inject a stray number into an unrelated heading right after the list. Avoid numbered-list syntax when typing multi-line content directly into the editor; use bold lead-in phrases as paragraphs instead, or add list markers in a separate pass after verifying the plain text landed correctly.
+
+**Verified-safe pattern for large multi-line insertions:** use Find-only (leave Replace blank) to locate and highlight an anchor line, press Escape to close the panel (this keeps the highlight), click at the start of the matched line, press Home, then type the full multi-line content directly into the main editor body — bypassing the Replace field entirely.
+
+**Always verify against the live file, not the editor UI.** After every commit, fetch the file from `raw.githubusercontent.com/<owner>/<repo>/main/<file>` and check the actual committed content before declaring a doc update done — don't trust what the editor displayed. Use small boolean/`.includes()` checks rather than dumping large raw content, since large text dumps from raw.githubusercontent.com pages can trigger a false-positive content-block.
+
+**QA loop rule (Aaron, Jul 17, 2026):** after any change, verify against the live/actual state. If anything is found incomplete or wrong, fix it and re-run the entire verification pass from the start — not just the fixed item — before calling the task done.
+
 ## Workflow for a new feature request
 
 1. Understand the actual current `index.html` in *this* repo (don't assume it matches prod — it
