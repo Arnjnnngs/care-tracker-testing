@@ -7,11 +7,12 @@ notifications are disabled (`TEST_MODE = true` short-circuits `subscribePush()` 
 `checkNotifications()`).
 
 **Governance:** see `CLAUDE.md` for the standing rules any contributor (human or AI) must follow in
-this repo — most importantly: never point this app at the real `caretracker_entries` collection, and
-never push here (or to prod) without asking first.
+this repo — most importantly: never point this app at the real `caretracker_entries` collection. After
+sandbox QA, testing changes may be pushed directly to this repo; any production push still requires
+Aaron's explicit, in-the-moment approval.
 
-**Testing-only date override:** at the top of the header (visible on every tab) there's a date
-picker plus ± 1 Day buttons and a "Reset to Today" button. Use it to simulate any date without
+**Testing-only date override:** at the top of the header (visible on every primary view) there's a
+date picker plus ± 1 Day buttons and a "Reset to Today" button. Use it to simulate any date without
 waiting for real time to pass — every date-dependent feature (chemo offsets, missed-dose windows,
 the cycle day counter, in-patient date ranges, and the timestamp on anything you log while the
 override is active) respects the simulated date. This control only exists and only functions when
@@ -34,6 +35,7 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v35 | Jul 18, 2026 | v34 | **Mobile navigation and medication-management overhaul.** Replaced the five top tabs with a fixed four-item bottom navigation: Home, Meds, Reports, and In-Patient. Home preserves the compact v34 Quick Log and all existing medication, chemo, missed-dose, cycle, vitals, and in-patient behavior. Meds adds an editable medication configuration page; configuration is stored only in browser-local storage and does not create or change a Firebase collection or the existing medication-entry data model. Reports is now a menu for the preserved History, Weight, and Cycle detail views, each with a themed back control while the bottom nav remains available. The header is simplified to CareTracker branding, Brandi's Meds, date/time, and the Live sync indicator. | Testing |
 | v34 | Jul 17, 2026 | v33 | **Compact medication-card redesign.** Restyled the Today tab's Quick Log cards for substantially higher phone-screen density without changing medication logic or Firebase behavior: reduced card padding, corner radii, shadows, and inter-card gaps; placed medication and generic names on one compact baseline with the status badge on the right; combined last-dose and availability information into one line; and converted dose controls into smaller inline pill buttons. The light-pink glassmorphism palette, Hanken Grotesk/IBM Plex Mono typography, and `#AA5375` accent remain intact, with darker text for improved contrast. | Testing |
 | v33 | Jul 17, 2026 | v32 | **Data-integrity fix.** Removed a dormant `seedDemo()` function that silently wrote 11 hardcoded fake medication entries into `caretracker_test_entries` whenever the app's first Firestore snapshot came back empty — which happens on a cold cache or a brief network blip on load, not only on a genuinely fresh install. The identical bug existed in production `care-tracker` (see its v28/v29 history) and had already written fake entries into real patient data there; this repo's fake entries never reached `caretracker_entries`, confirmed via a `TEST_MODE`/`COL_NAME` routing audit. Trigger permanently disabled (`if (false && wasEmpty && entries.length === 0)` in the Firestore subscription callback); all 11 fake entries identified by timestamp fingerprint and deleted from Firestore, re-verified via a fresh collection query (0 matches). The dead `demo` state flag and its banner UI were left in place — unreachable, harmless, flagged for an optional cleanup pass. | Testing |
 | v32 | Jul 16, 2026 | v31 | Menstrual Cycle moved off the Weight tab into its own **Cycle** tab (tab order: Today / History / Weight / Cycle / In-Patient), with a Cycle History list of past periods (unchanged underlying Start/End logic). Chemo banner rewrite: Zofran-restricted days now say "restricted" in the banner body and get a standalone red **Zofran — Restricted** badge; days Dexamethasone is due get a standalone light-green **Dexamethasone Due** badge — both replace the old plain-text wording so they can't be missed. In-Patient tracking redesigned from a single daily toggle to a **Start / End / Undo** model (mirrors the Cycle tab): Start and End are instant one-tap logs with a confirmation toast; Undo requires a second confirming tap (toast prompt) and deletes the open Start entry entirely — for correcting an accidental Start, not for closing a real stay. A non-dismissible **In-Patient Active** banner is pinned to the top of Today whenever a stay is open, with a Log In-Patient End button on the banner itself. While active, every med (Quick Log cards and Evening meds) displays as `<Med Name> - In-Patient (Restricted)` instead of normal logging controls. In-Patient history now stores real start/end timestamps (supports half-day precision) instead of day-buckets, e.g. `7/13/2026 3:15 PM – 7/14/2026 9:00 AM (2 days)`. New `inpatient_start`/`inpatient_end` entry types replace the old single `inpatient` marker going forward; legacy `inpatient` marker entries from before this version are still recognized for missed-dose suppression. | Testing |
@@ -73,7 +75,7 @@ Push notifications are disabled in this build (`TEST_MODE`).
 ## Tech Stack
 
 - **Frontend:** Vanilla JavaScript (ES module in production build; classic script in the QA harness), inline CSS, single-file `index.html`
-- **Visual theme:** Light pink glassmorphism (`#FFF0F3` background, `#AA5375` accent) with compact, high-density Quick Log medication cards — **not** production's dark theme
+- **Visual theme:** Light pink glassmorphism (`#FFF0F3` background, `#AA5375` accent) with compact, high-density Quick Log medication cards and a fixed native-style mobile bottom navigation — **not** production's dark theme
 - **Backend/Database:** Firebase Firestore (project `fuelforge-7c132`, shared with prod, isolated by collection name)
 - **Hosting:** GitHub Pages
 - **Fonts:** Hanken Grotesk, IBM Plex Mono (Google Fonts)
@@ -106,7 +108,7 @@ gap-based push reminder system that exists in production does not run here at al
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v34` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v35` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
@@ -140,7 +142,7 @@ Journal, or in History.
 
 ## Chemo Cycle
 
-Set a chemo date on the Today tab's "Chemo schedule" card. The app derives offsets from that date:
+Set a chemo date on the Home view's "Chemo schedule" card. The app derives offsets from that date:
 Dexamethasone appears (and is required) days −1 through +1, phased red chemo banners run days −2
 through +1, and Zofran is blocked on days 0–1 (override available if the care team says otherwise).
 
@@ -148,16 +150,19 @@ through +1, and Zofran is blocked on days 0–1 (override available if the care 
 
 - **Temperature** — logged in °F with timestamp; input shows **98.5°F as a grayed placeholder** (v29/v30) — the user must still type a value; an untouched field is rejected, not silently logged
 - **Weight** — logged in lbs with timestamp; input shows **the last recorded weight as a grayed placeholder** (v29/v30) — same rule, must be typed to submit
-- **Menstrual Cycle** — its own **Cycle** tab (v32; previously a card on the Weight tab). Logged as two one-tap events, Period Start and Period End — tapping logs immediately at the current time (no date/time picker). Shows a running "Day N" counter (days since the most recently logged period start), an "Active" badge while a period is in progress, and a Cycle History list of past periods. **A non-dismissible "Period Active" banner also appears on the Today (home) screen for the whole cycle (v30)** — it has no close control and stays up until Period End is logged, with a one-tap Log Period End button right on the banner.
-- **In-Patient (hospital) tracking** — **Start / End / Undo** model (v32; previously a single daily toggle). The **In-Patient** tab has Log In-Patient Start / Log In-Patient End buttons (one-tap, timestamped to the second) plus an Undo button that only appears while a stay is open; Undo requires a second confirming tap (toast prompt) and deletes the open Start entry — for correcting an accidental Start, not for closing a real stay. History shows real start/end timestamps supporting half-day precision, e.g. `7/13/2026 3:15 PM – 7/14/2026 9:00 AM (2 days)`, or `7/13/2026 3:15 PM – Active` while still open. While a stay is active: a non-dismissible **In-Patient Active** banner is pinned to the top of Today (with its own Log In-Patient End button), and every med in Quick Log and Evening meds displays as `<Med Name> - In-Patient (Restricted)` in place of normal logging controls, since those doses are given by hospital staff and aren't tracked here.
+- **Menstrual Cycle** — available at **Reports → Cycle** (v35; previously a standalone top tab). Logged as two one-tap events, Period Start and Period End — tapping logs immediately at the current time (no date/time picker). Shows a running "Day N" counter (days since the most recently logged period start), an "Active" badge while a period is in progress, and a Cycle History list of past periods. **A non-dismissible "Period Active" banner also appears on the Home screen for the whole cycle (v30)** — it has no close control and stays up until Period End is logged, with a one-tap Log Period End button right on the banner.
+- **In-Patient (hospital) tracking** — **Start / End / Undo** model (v32; previously a single daily toggle), reached from the persistent **In-Patient** bottom-nav item. It has Log In-Patient Start / Log In-Patient End buttons (one-tap, timestamped to the second) plus an Undo button that only appears while a stay is open; Undo requires a second confirming tap (toast prompt) and deletes the open Start entry — for correcting an accidental Start, not for closing a real stay. History shows real start/end timestamps supporting half-day precision, e.g. `7/13/2026 3:15 PM – 7/14/2026 9:00 AM (2 days)`, or `7/13/2026 3:15 PM – Active` while still open. While a stay is active: a non-dismissible **In-Patient Active** banner is pinned to the top of Home (with its own Log In-Patient End button), and every med in Quick Log and Evening meds displays as `<Med Name> - In-Patient (Restricted)` in place of normal logging controls, since those doses are given by hospital staff and aren't tracked here.
 
 ## App Views
 
-- **Today** — In-Patient Active banner (pinned, only when a stay is open), missed-dose banner, chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, quick-log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active)
-- **History** — grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries (which have their own views); Period Start/End rows appear but aren't counted as doses
-- **Weight** — weight trend chart only (v32 — Menstrual Cycle moved to its own tab)
-- **Cycle** — Menstrual Cycle Start/End card plus Cycle History list (v32, moved off Weight)
-- **In-Patient** — Start/End/Undo card plus a history list of hospital stays with real start/end timestamps
+The fixed bottom navigation is present on every primary route: **Home**, **Meds**, **Reports**, and
+**In-Patient**. It replaces the former top-tab bar and reserves bottom safe-area space on phone-sized
+screens.
+
+- **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner, chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
+- **Meds** — medication-management page for the active configuration. It lists each medication's display/generic names, dose options, gap/frequency rules, daily limit, and schedule type; supports Add, Edit, and confirmation-protected Delete. The configuration persists in browser-local storage only; dose and vitals history remains in the existing Firestore test collection.
+- **Reports** — a menu of three cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), and **Cycle** (Menstrual Cycle Start/End card plus Cycle History). Each detail view has a themed right-aligned back control to return to Reports.
+- **In-Patient** — Start/End/Undo card plus a history list of hospital stays with real start/end timestamps.
 
 ## Troubleshooting: "All Blank" / Stale Cache
 

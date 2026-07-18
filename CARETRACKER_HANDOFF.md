@@ -11,8 +11,8 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 17, 2026
-> **Current version:** v34 (see README.md's versioning convention — this repo's version is always
+> **Last updated:** July 18, 2026
+> **Current version:** v35 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
@@ -63,10 +63,12 @@ production, the scheduled/gap-based reminder cron system doesn't exist here at a
   Firestore, since jsdom does not reliably execute module scripts.
 - **Rendering:** Custom `h()` hyperscript-style DOM builder + full `render()` on every `setState()`.
 - **Styling:** Inline `<style>` + inline `style` objects on every element. **Theme is light pink
-  glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) with compact, high-density Quick
-  Log medication cards — medication/generic names share the header line, status remains right-aligned,
-  dose/availability metadata shares one line, and dose buttons are inline pills. Do not describe this
-  as dark; that's production's old theme, not this one.
+glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) with compact, high-density Quick
+Log medication cards — medication/generic names share the header line, status remains right-aligned,
+dose/availability metadata shares one line, and dose buttons are inline pills. A fixed native-style
+bottom navigation (Home, Meds, Reports, In-Patient) is present on every primary route and reserves
+safe-area space at the bottom of phone screens. Do not describe this as dark; that's production's old
+theme, not this one.
 - **Backend:** Firebase Firestore, project `fuelforge-7c132` (shared with prod; isolated by
   collection name, see below). No auth.
 - **Hosting:** GitHub Pages.
@@ -108,6 +110,17 @@ Production's real collection. **This app must never write here.**
 | `buspirone` / `paroxetine` / `iron` | — | Once daily, 10 PM window, missed-dose tracked |
 | `senokot` | Senokot | As-needed, 8 AM & 10 PM windows |
 
+### Medication Management (v35)
+- **Active medication configuration** lives in `state.meds`; the in-code `DEFAULT_MEDS` array remains
+  the baseline used on a device with no saved configuration.
+- `loadMedicationConfig()` and `persistMedicationConfig()` use browser-local storage key
+  `caretracker_testing_med_config_v1`. This is intentionally a UI/configuration feature, not a new
+  Firestore collection or an alteration to the existing entry schema.
+- `archivedMeds` preserves a name/generic label locally when a configured medication is deleted, so
+  historical entry rendering remains intelligible. Delete is always confirmation-protected.
+- Configuration can differ by device/browser profile. Do not describe this as real-time shared
+  medication configuration; only medication entries continue to sync through Firestore.
+
 ### Vitals
 - **Temperature** — °F. Input shows `tempDefault()` (`98.5`) as an HTML `placeholder` (grayed hint
   text only) — **the actual `value` is always `state.tempInput`, never auto-filled** (reverted in
@@ -124,7 +137,7 @@ Production's real collection. **This app must never write here.**
 - `nextChemoTs()` reads the most recently-set (`loggedAt`) `chemo_date` record; `ts: 0` means cleared.
 - `chemoOffsetFor(dayTs)` = days between a given day and the chemo date (negative = before).
 - `dexActiveOn(day)` = offset in `[-1, 1]`. `zofranBlockedOn(day)` = offset in `{0, 1}`.
-- Today tab shows a phased red banner for offsets `[-2, 1]` and a "Chemo schedule" card to set/clear the date.
+- Home shows a phased red banner for offsets `[-2, 1]` and a "Chemo schedule" card to set/clear the date.
 
 ### Missed-dose alerts
 `missedDosesFor(dayTs, now)` checks every med with `alerts: true` and `windows` (Dexamethasone,
@@ -145,15 +158,14 @@ showing in the Today banner's rollover section, and vice versa.
 - `cyclePeriods()` — pairs `cycle_start`/`cycle_end` chronologically into `{start, end}` periods
   (`end: null` if still open); `fmtCyclePeriod()` formats each as `M/D/YYYY – Active` or
   `M/D/YYYY – M/D/YYYY (N days)`.
-- UI (**Cycle** tab, v32 — moved off the Weight tab, sits between Weight and In-Patient in the tab
-  bar): a card at the top with an "Active" badge and a single context-sensitive button ("Log Period
-  Start" / "Log Period End"), plus a Cycle History list below it built from `cyclePeriods()`. The
-  underlying `cycle_start`/`cycle_end` event logic was **not touched** in the v32 move — only where
-  it renders changed.
-- UI (Today tab, v30): whenever `cycleActive()` is true, a **non-dismissible** "Period Active"
-  banner renders near the top of the Today (home) screen — no close/dismiss control exists on it by
-  design, it only goes away once `logCycleEnd()` is called (either from this banner's own "Log
-  Period End" button, or from the Cycle tab's card — both write the same `cycle_end` event).
+- UI (**Reports → Cycle**, v35 — previously a standalone top tab): a card at the top with an "Active"
+  badge and a single context-sensitive button ("Log Period Start" / "Log Period End"), plus a Cycle
+  History list below it built from `cyclePeriods()`. The underlying `cycle_start`/`cycle_end` event
+  logic was **not touched** in the v35 routing change — only where it renders changed.
+- UI (Home, v30): whenever `cycleActive()` is true, a **non-dismissible** "Period Active" banner
+  renders near the top of Home — no close/dismiss control exists on it by design, it only goes away
+  once `logCycleEnd()` is called (either from this banner's own "Log Period End" button, or from the
+  Reports → Cycle card — both write the same `cycle_end` event).
 
 ### In-Patient tracking (v29; missed-dose suppression v30; Start/End/Undo redesign v32)
 As of v32 this is a **paired start/end event model**, mirroring the menstrual cycle, replacing the
@@ -176,11 +188,11 @@ original single daily toggle marker:
 - `fmtInpatientDateTime()` — `M/D/YYYY h:mm AM/PM`. `fmtInpatientPeriod()` — single period →
   `<start> – Active` or `<start> – <end> (N days)`, using real timestamps so a same-day stay of a
   few hours still shows correctly (half-day precision) instead of collapsing into a single date.
-- UI (**In-Patient** tab): a Start/End/Undo card at the top (Log In-Patient Start when inactive; Log
-  In-Patient End + Undo side-by-side when active, Undo relabeling to "Tap to confirm" mid-flow) plus
-  an In-Patient History list below it built from `inpatientPeriods()`.
-- UI (Today tab, v32): whenever `isInpatientActiveNow()` is true, a **non-dismissible, pinned**
-  "In-Patient Active" banner renders at the top of Today with its own Log In-Patient End button — no
+- UI (persistent **In-Patient** bottom-nav route): a Start/End/Undo card at the top (Log In-Patient
+  Start when inactive; Log In-Patient End + Undo side-by-side when active, Undo relabeling to "Tap to
+  confirm" mid-flow) plus an In-Patient History list below it built from `inpatientPeriods()`.
+- UI (Home, v32): whenever `isInpatientActiveNow()` is true, a **non-dismissible, pinned**
+  "In-Patient Active" banner renders at the top of Home with its own Log In-Patient End button — no
   close/dismiss control by design, same pattern as the Period Active banner.
 - UI (Quick Log + Evening meds, v32): while `isInpatientActiveNow()` is true, every med card in both
   sections renders as `<Med Name> - In-Patient (Restricted)` with a "Given by hospital staff — not
@@ -219,7 +231,7 @@ manual testing:
   breaking that ordering. The chemo date itself (`ts`, picked from the date input) is unaffected
   either way — it was never derived from "now".
 - UI: a dashed-border amber panel at the top of the header, below the orange "🧪 Testing app" banner,
-  visible on every tab (not just Today) since the picker affects Weight/History/In-Patient views
+  visible on every primary route (not just Home) since the picker affects Reports and In-Patient views
   too. Only rendered when `TEST_MODE` is true. Shows a "+N days from real today" label whenever the
   offset isn't zero.
 - **Production safety:** confirmed via a dedicated QA pass that re-runs the whole app with
@@ -227,7 +239,7 @@ manual testing:
   `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v34` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v35` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -243,8 +255,9 @@ receives a background message in practice.
 
 1. Edit `index.html` (and `sw.js`, docs) locally.
 2. Bump `CACHE` in `sw.js` to the new version number (see README's versioning convention).
-3. **Ask Aaron before pushing** — this repo included. Once confirmed, push to `main`; GitHub Pages
-   auto-deploys within ~1 minute.
+3. Complete sandbox QA with a mocked Firestore harness, then push testing changes directly to `main`
+   under the repository's standing testing-push authorization. GitHub Pages auto-deploys within about
+   one minute. Production remains a separate repo and still requires Aaron's explicit approval.
 4. Devices with the old service worker pick up the new version on next visit.
 
 ### Cache reset
@@ -265,8 +278,9 @@ cache-busting query string.
 4. **Zofran's chemo-day block is independent of its (now-removed) gap timer** — don't assume
    `gapH: 0` means Zofran is unrestricted; `status()` checks `zofranBlockedOn()` before the gap logic
    and still locks it (with override) on chemo days 0–1.
-5. **`painLevel` is optional** — the time modal's dropdown defaults to "Not recorded"; don't assume
-   every Morphine entry has one when reading history data.
+5. **`painLevel` is required for new Tylenol and Morphine entries** — `confirmTimeAndLog()` rejects a
+   blank selection. Older test records from before v30 may not have a value, so history rendering must
+   remain tolerant of it.
 6. **Single-file architecture** — same tradeoff as prod: simple, but one large file to edit carefully.
 
 ## 10. Version History
@@ -274,6 +288,18 @@ cache-busting query string.
 See README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter).
+
+### v35 — July 18, 2026
+
+**Mobile navigation and medication-management overhaul.** The legacy top-tab strip was replaced by a
+fixed, safe-area-aware mobile bottom navigation with **Home**, **Meds**, **Reports**, and
+**In-Patient**. Home retains the v34 compact Quick Log and all existing Firebase-backed logging,
+chemo, missed-dose, cycle, vitals, and in-patient behavior. Meds is an editable configuration view
+for active medications; its Add/Edit/confirmation-protected Delete controls persist configuration to
+browser-local storage only and do not create a Firestore collection or alter the medication-entry data
+model. Reports is now a menu leading to the preserved History, Weight, and Cycle detail views, each
+with a themed right-aligned back control while bottom navigation remains available. The header now
+keeps only CareTracker branding, Brandi's Meds, date/time, and Live sync.
 
 ### v34 — July 17, 2026
 
@@ -296,12 +322,16 @@ A dormant `seedDemo()` function fired whenever the app's first Firestore snapsho
 
 ## 11. Quick Reference for Common Tasks
 
-### Add a new medication
-1. Add an entry to the `MEDS` array in `index.html` with `id`, `name`, `sub`, dosing rules.
-2. It appears in Quick Log automatically if `type === 'gap'` (and not `compazine`) or is explicitly
-   included in the Quick Log filter, or in the Evening meds group if added to that id list.
-3. If it needs missed-dose tracking, add `alerts: true` and a `windows` array.
-4. No reminder system exists in this repo to wire up — that only applies to prod.
+### Add or edit a medication
+1. Use the **Meds** bottom-nav page and select **Add medication** or **Edit**. The UI captures the
+   display name, generic name, dose labels/mg values, gap, daily limit, and schedule type.
+2. The active medication configuration persists only in browser-local storage under
+   `caretracker_testing_med_config_v1`; it does **not** create or modify a Firebase collection.
+3. Deleting a medication requires explicit in-app confirmation. Existing Firestore entries are not
+   deleted, and their historical medication label remains resolvable through archived local metadata.
+4. For a new built-in default or a medication that needs special clinical logic (missed-dose windows,
+   chemo-only behavior, pain scale, etc.), update `DEFAULT_MEDS` and the relevant explicit render or
+   safety rules in `index.html`, then complete the full mocked-Firestore regression pass.
 
 ### Bump the version
 1. Check the **actual pushed** `care-tracker` (prod) repo for its current live version.

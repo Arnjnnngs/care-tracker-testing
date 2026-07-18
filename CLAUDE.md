@@ -45,12 +45,18 @@ promoted to the app Brandi's caregiver actually relies on.
   descriptions into these docs. Keep Quick Log medication cards compact and phone-dense: medication and
   generic names share a header line, the status badge stays right-aligned, last-dose/availability share
   one metadata line, and dose controls stay as inline pills unless a functional requirement requires
-  otherwise.
+  otherwise. The fixed native-style bottom navigation is the primary information architecture: **Home**
+  contains the former Today flow, **Meds** contains medication management, **Reports** opens History,
+  Weight, and Cycle detail views with a themed back control, and **In-Patient** retains hospital-stay
+  tracking. Do not reintroduce the legacy top-tab strip without explicit approval.
 - This repo currently has features prod does not: the chemo-cycle system (chemo date, Dexamethasone,
   Zofran chemo-day block, chemo banners), missed-dose alerts, menstrual cycle tracking, In-Patient day
-  tracking, a pain-level (1–10) scale on Morphine logs, and Zofran treated as a plain as-needed med
-  (no gap timer, no reminders). Confirm feature parity/divergence against prod before promoting
-  anything — don't assume the two `index.html` files are close to each other structurally.
+  tracking, a pain-level (1–10) scale on Morphine logs, editable browser-local medication configuration,
+  and Zofran treated as a plain as-needed med (no gap timer, no reminders). The Meds configuration
+  persists only under `caretracker_testing_med_config_v1`; it is not a Firebase collection, is not
+  shared in real time across devices, and must not be represented as a change to medication-entry data.
+  Confirm feature parity/divergence against prod before promoting anything — don't assume the two
+  `index.html` files are close to each other structurally.
 - **Versioning matches prod, offset ahead.** This repo's version number is always
   `(current live/pushed prod version) + 1` while testing is ahead of production — e.g. if prod is
   live at v27, testing is v28, and the next testing change becomes v29, and so on, until those
@@ -83,7 +89,9 @@ This repo's docs get edited via GitHub's web editor (Find & Replace panel), sinc
 1. Understand the actual current `index.html` in *this* repo (don't assume it matches prod — it
    frequently doesn't). Read the real file, not stale docs.
 2. Implement against this repo's actual theme, state shape, and existing features so nothing
-   regresses (chemo banners, missed-dose alerts, evening-meds flow, etc.).
+   regresses (compact Home cards, bottom navigation, chemo banners, missed-dose alerts, evening-meds
+   flow, etc.). For Meds changes, preserve the browser-local configuration boundary and ensure
+   historical Firebase entries remain intelligible if a medication is archived or deleted.
 3. Build a mocked-Firestore QA harness and verify both the new behavior and a regression pass over
    existing features.
 4. Update `README.md`'s Version History table (new row, numbered per the versioning rule above)
