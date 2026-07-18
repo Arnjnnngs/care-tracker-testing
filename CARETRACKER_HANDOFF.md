@@ -12,7 +12,7 @@
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 17, 2026
-> **Current version:** v33 (see README.md's versioning convention — this repo's version is always
+> **Current version:** v34 (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
@@ -63,8 +63,10 @@ production, the scheduled/gap-based reminder cron system doesn't exist here at a
   Firestore, since jsdom does not reliably execute module scripts.
 - **Rendering:** Custom `h()` hyperscript-style DOM builder + full `render()` on every `setState()`.
 - **Styling:** Inline `<style>` + inline `style` objects on every element. **Theme is light pink
-  glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) — do not describe this as dark;
-  that's production's old theme, not this one.
+  glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) with compact, high-density Quick
+  Log medication cards — medication/generic names share the header line, status remains right-aligned,
+  dose/availability metadata shares one line, and dose buttons are inline pills. Do not describe this
+  as dark; that's production's old theme, not this one.
 - **Backend:** Firebase Firestore, project `fuelforge-7c132` (shared with prod; isolated by
   collection name, see below). No auth.
 - **Hosting:** GitHub Pages.
@@ -225,7 +227,7 @@ manual testing:
   `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v32` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v34` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -272,6 +274,15 @@ cache-busting query string.
 See README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter).
+
+### v34 — July 17, 2026
+
+**Compact medication-card redesign.** The Today tab's Quick Log cards were restyled for much higher
+phone-screen density only: padding, radii, shadows, and inter-card gaps were reduced; medication and
+generic names now share a compact header row with the status badge aligned right; last-dose and
+availability information share one metadata row; and dose controls are compact inline pills. The
+light-pink glassmorphism palette, Hanken Grotesk/IBM Plex Mono fonts, `#AA5375` accent, Firebase
+routing, and all medication logic remain unchanged.
 
 ## Known Issues (Fixed)
 

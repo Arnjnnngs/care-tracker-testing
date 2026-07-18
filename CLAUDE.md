@@ -42,7 +42,10 @@ promoted to the app Brandi's caregiver actually relies on.
 - `firebase-messaging-sw.js` is present (copied from prod) but effectively unused while `TEST_MODE`
   is on, since the app never registers for a push token here.
 - The visual theme is **light pink glassmorphism**, not dark — don't copy prod's dark-theme
-  descriptions into these docs.
+  descriptions into these docs. Keep Quick Log medication cards compact and phone-dense: medication and
+  generic names share a header line, the status badge stays right-aligned, last-dose/availability share
+  one metadata line, and dose controls stay as inline pills unless a functional requirement requires
+  otherwise.
 - This repo currently has features prod does not: the chemo-cycle system (chemo date, Dexamethasone,
   Zofran chemo-day block, chemo banners), missed-dose alerts, menstrual cycle tracking, In-Patient day
   tracking, a pain-level (1–10) scale on Morphine logs, and Zofran treated as a plain as-needed med

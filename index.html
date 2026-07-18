@@ -15,7 +15,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;}
-body{-webkit-font-smoothing:antialiased;background:#FFF0F3;font-family:'Hanken Grotesk',system-ui,sans-serif;color:#3D2B3A;}
+body{-webkit-font-smoothing:antialiased;background:#FFF0F3;font-family:'Hanken Grotesk',system-ui,sans-serif;color:#342530;}
 button{-webkit-tap-highlight-color:transparent;font-family:inherit;cursor:pointer;border:none;background:none;}
 button:active{transform:translateY(1px);}
 input{-webkit-tap-highlight-color:transparent;font-family:inherit;}
@@ -935,9 +935,9 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
   // Quick Log section
   const medCards = MEDS.filter(m => ((m.type === 'gap' && m.id !== 'compazine') || m.id === 'protonix' || m.id === 'senokot' || m.id === 'dexamethasone') && (!m.chemoOnly || dexActiveOn(now))).map(med => {
     if (inpatientActiveNow) {
-      return h('div', { style: { background: 'rgba(154,100,25,0.08)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1.5px dashed rgba(154,100,25,0.35)', borderRadius: '18px', padding: '15px', display: 'flex', flexDirection: 'column', gap: '6px' } },
-        h('div', { style: { fontSize: '17px', fontWeight: '800', letterSpacing: '-0.01em', color: '#9A6419' } }, med.name + ' - In-Patient (Restricted)'),
-        h('div', { style: { fontSize: '12.5px', color: '#7A5313' } }, 'Given by hospital staff — not logged in this app')
+      return h('div', { style: { background: 'rgba(154,100,25,0.08)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1.5px dashed rgba(154,100,25,0.35)', borderRadius: '16px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' } },
+        h('div', { style: { fontSize: '15px', fontWeight: '800', letterSpacing: '-0.01em', color: '#8B5715' } }, med.name + ' - In-Patient (Restricted)'),
+        h('div', { style: { fontSize: '11.5px', color: '#704E22' } }, 'Given by hospital staff — not logged in this app')
       );
     }
     const st = status(med);
@@ -974,51 +974,51 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
       const amt = med.ceilingUnit ? (d.pills || 0) : (d.mg || 0);
       return amt > 0 && amt > (dc.max - dc.used);
     };
-    const blockedBtn = (d) => h('button', { onClick: () => setToast('Exceeds today’s ' + dc.label + ' limit — ' + (med.ceilingUnit ? (dc.max - dc.used) + ' ' + dc.unit : (dc.max - dc.used).toLocaleString() + ' mg') + ' left'), style: { flex: '1', minWidth: '92px', minHeight: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.35)', border: '1px dashed rgba(138,100,121,0.35)', color: '#9A8390', fontSize: '15px', fontWeight: '600', cursor: 'not-allowed' } }, (d.single ? ('Log ' + med.name) : d.label) + ' · over limit');
+    const blockedBtn = (d) => h('button', { onClick: () => setToast('Exceeds today’s ' + dc.label + ' limit — ' + (med.ceilingUnit ? (dc.max - dc.used) + ' ' + dc.unit : (dc.max - dc.used).toLocaleString() + ' mg') + ' left'), style: { flex: '0 0 auto', minWidth: '0', minHeight: '32px', padding: '0 12px', borderRadius: '999px', background: 'rgba(255,255,255,0.35)', border: '1px dashed rgba(138,100,121,0.35)', color: '#765B69', fontSize: '12px', fontWeight: '600', cursor: 'not-allowed' } }, (d.single ? ('Log ' + med.name) : d.label) + ' · over limit');
 
     // Buttons
     let buttonArea;
     if (!locked) {
-      buttonArea = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-        ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => logMed(med.id, d.single ? null : d), style: { flex: '1', minWidth: '92px', minHeight: '52px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, d.single ? ('Log ' + med.name) : d.label))
+      buttonArea = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+        ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => logMed(med.id, d.single ? null : d), style: { flex: '0 0 auto', minWidth: '0', minHeight: '32px', padding: '0 13px', borderRadius: '999px', background: '#AA5375', color: '#fff', fontSize: '12.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, d.single ? ('Log ' + med.name) : d.label))
       );
     } else if (!isOverriding) {
-      buttonArea = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-        ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => setState({ override: { medId: med.id } }), style: { flex: '1', minWidth: '92px', minHeight: '52px', border: '1px dashed rgba(255,255,255,0.12)', borderRadius: '13px', background: 'rgba(255,255,255,0.04)', color: '#7D6A74', fontSize: '15px', fontWeight: '600' } }, d.single ? ('Log ' + med.name) : d.label))
+      buttonArea = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+        ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => setState({ override: { medId: med.id } }), style: { flex: '0 0 auto', minWidth: '0', minHeight: '32px', padding: '0 13px', border: '1px solid rgba(212,104,138,0.24)', borderRadius: '999px', background: 'rgba(255,255,255,0.42)', color: '#624A59', fontSize: '12.5px', fontWeight: '600' } }, d.single ? ('Log ' + med.name) : d.label))
       );
     } else {
-      buttonArea = h('div', { style: { background: 'rgba(192,69,59,0.12)', border: '1px solid rgba(192,69,59,0.25)', borderRadius: '14px', padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: '9px' } },
-        h('div', { style: { fontSize: '12.5px', color: '#A15B56', fontWeight: '600', lineHeight: '1.4', display: 'flex', alignItems: 'center', gap: '7px' } },
+      buttonArea = h('div', { style: { background: 'rgba(192,69,59,0.12)', border: '1px solid rgba(192,69,59,0.25)', borderRadius: '13px', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '7px' } },
+        h('div', { style: { fontSize: '11.5px', color: '#A15B56', fontWeight: '600', lineHeight: '1.35', display: 'flex', alignItems: 'center', gap: '7px' } },
           h('span', { style: { flexShrink: '0', width: '18px', height: '18px', borderRadius: '50%', background: '#C0453B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '12px' } }, '!'),
           st.ceilingHit ? ('Daily ' + (dc ? dc.label : CONFIG.ceilingMg.toLocaleString() + ' mg') + ' ceiling reached. Log more anyway?') : st.chemoBlock ? 'Care team said no Zofran on chemo days. Log it anyway?' : ('Closed — opens in ' + countdownLabel + '. Log it early anyway?')
         ),
-        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-          ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => logMed(med.id, d.single ? null : d, { force: true }), style: { flex: '1', minWidth: '92px', minHeight: '48px', borderRadius: '11px', background: '#C0453B', color: '#fff', fontSize: '14.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,40,34,0.4)' } }, d.single ? 'Override — log now' : ('Log ' + d.label + ' now'))),
-          h('button', { onClick: () => setState({ override: null }), style: { flexShrink: '0', minHeight: '48px', padding: '0 15px', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '11px', background: 'rgba(255,255,255,0.5)', color: '#A15B56', fontSize: '14px', fontWeight: '600' } }, 'Cancel')
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+          ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => logMed(med.id, d.single ? null : d, { force: true }), style: { flex: '0 0 auto', minWidth: '0', minHeight: '34px', padding: '0 13px', borderRadius: '999px', background: '#C0453B', color: '#fff', fontSize: '12.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,40,34,0.4)' } }, d.single ? 'Override — log now' : ('Log ' + d.label + ' now'))),
+          h('button', { onClick: () => setState({ override: null }), style: { flexShrink: '0', minHeight: '34px', padding: '0 12px', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '999px', background: 'rgba(255,255,255,0.5)', color: '#A15B56', fontSize: '12.5px', fontWeight: '600' } }, 'Cancel')
         )
       );
     }
 
-    return h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '15px', display: 'flex', flexDirection: 'column', gap: '12px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+    return h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '10px 11px', display: 'flex', flexDirection: 'column', gap: '6px', boxShadow: '0 3px 14px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
       // Header row
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' } },
-        h('div', null,
-          h('div', { style: { fontSize: '17px', fontWeight: '800', letterSpacing: '-0.01em' } }, med.name),
-          h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, med.sub)
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
+        h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '4px', minWidth: '0', flex: '1', flexWrap: 'wrap' } },
+          h('div', { style: { fontSize: '15.5px', fontWeight: '800', letterSpacing: '-0.01em', color: '#342530', whiteSpace: 'nowrap' } }, med.name),
+          h('div', { style: { fontSize: '11.5px', color: '#664F5D', fontWeight: '600', whiteSpace: 'nowrap' } }, med.sub)
         ),
         locked ?
-          h('div', { className: 'mono', innerHTML: lockSVG + ' ' + (st.ceilingHit ? 'Limit' : st.chemoBlock ? 'Chemo' : countdownLabel), style: { display: 'inline-flex', alignItems: 'center', gap: '6px', background: st.ceilingHit ? 'rgba(192,69,59,0.15)' : 'rgba(255,255,255,0.4)', color: st.ceilingHit ? '#A15B56' : '#5C6662', border: '1px solid ' + (st.ceilingHit ? 'rgba(192,69,59,0.25)' : 'rgba(212,104,138,0.15)'), borderRadius: '99px', padding: '5px 11px', fontSize: '12.5px', fontWeight: '600', flexShrink: '0' } }) :
-          h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(212,104,138,0.12)', color: '#AA5375', border: '1px solid rgba(212,104,138,0.25)', borderRadius: '99px', padding: '5px 11px', fontSize: '12.5px', fontWeight: '700', flexShrink: '0' } },
-            h('span', { style: { width: '7px', height: '7px', borderRadius: '50%', background: '#AA5375', display: 'inline-block' } }),
+          h('div', { className: 'mono', innerHTML: lockSVG + ' ' + (st.ceilingHit ? 'Limit' : st.chemoBlock ? 'Chemo' : countdownLabel), style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: st.ceilingHit ? 'rgba(192,69,59,0.15)' : 'rgba(255,255,255,0.4)', color: st.ceilingHit ? '#A15B56' : '#4F5B56', border: '1px solid ' + (st.ceilingHit ? 'rgba(192,69,59,0.25)' : 'rgba(212,104,138,0.15)'), borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '600', flexShrink: '0', whiteSpace: 'nowrap' } }) :
+          h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(212,104,138,0.12)', color: '#8E3D61', border: '1px solid rgba(212,104,138,0.28)', borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '700', flexShrink: '0', whiteSpace: 'nowrap' } },
+            h('span', { style: { width: '6px', height: '6px', borderRadius: '50%', background: '#AA5375', display: 'inline-block' } }),
             'Open'
           )
       ),
       // Meta lines
-      h('div', { style: { fontSize: '12.5px', color: '#8A6479', display: 'flex', flexDirection: 'column', gap: '2px' } },
-        h('span', null, lastLabel),
-        h('span', { style: { color: st.ceilingHit ? '#A15B56' : locked ? '#9A6419' : '#AA5375', fontWeight: '600', fontSize: '12px' } }, nextDoseLabel),
-        subStatus ? h('span', { style: { color: '#7D6974' } }, subStatus) : null,
-        h('span', { style: { color: '#7D6A74', fontSize: '11.5px' } }, med.note)
+      h('div', { style: { fontSize: '11px', color: '#584350', display: 'flex', alignItems: 'center', gap: '4px', minWidth: '0', lineHeight: '1.3' } },
+        h('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, lastLabel),
+        h('span', { style: { flexShrink: '0', color: st.ceilingHit ? '#A15B56' : locked ? '#96631C' : '#8E3D61', fontWeight: '700', fontSize: '11px', whiteSpace: 'nowrap' } }, nextDoseLabel),
+        subStatus ? h('span', { style: { display: 'none', color: '#7D6974' } }, subStatus) : null,
+        h('span', { style: { display: 'none', color: '#7D6A74', fontSize: '11.5px' } }, med.note)
       ),
       // Buttons
       buttonArea
@@ -1027,7 +1027,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
 
   parts.push(h('section', null,
     h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479' } }, 'Quick log'),
-    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: '12px', marginTop: '11px' } }, ...medCards)
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '8px', marginTop: '8px' } }, ...medCards)
   ));
 
   // Evening meds — one grouped card (Buspirone, Paroxetine, Iron, Compazine)
