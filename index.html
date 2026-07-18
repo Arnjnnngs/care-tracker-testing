@@ -117,9 +117,8 @@ const DEFAULT_MEDS = [
     windows:[{start:22,end:24,name:'Night'}] },
   { id:'iron', name:'Iron', sub:'Ferrous sulfate', type:'win', alerts:true, note:'Once daily · 10 PM',
     windows:[{start:22,end:24,name:'Night'}] },
-  { id:'senokot', name:'Senokot', sub:'Senna', type:'win', note:'2 pills · 8 AM & 10 PM · as needed',
-    doses:[{label:'2 pills',pills:2,mg:0}],
-    windows:[{start:8,end:12,name:'Morning'},{start:22,end:24,name:'Night'}] },
+  { id:'senokot', name:'Senokot', sub:'Senna', type:'gap', gapH:0, note:'As needed · 1–2 pills',
+    doses:[{label:'1 pill',pills:1,mg:0},{label:'2 pills',pills:2,mg:0}] },
   { id:'imodium', name:'Imodium', sub:'Loperamide', type:'gap', gapH:0, ceiling:true, ceilingMax:4, ceilingUnit:'pills', note:'Max 4 pills per day',
     doses:[{label:'2 pills (onset)',pills:2,mg:0},{label:'1 pill',pills:1,mg:0}] },
 ];
@@ -186,6 +185,14 @@ function defaultMedicationConfig() {
   return { meds: deepCopyMeds(DEFAULT_MEDS).map(normalizeMedication), archivedMeds: {} };
 }
 
+// v37 one-shot migration: Senokot became plain as-needed with 1- or 2-pill options.
+// Saved device configs still carrying the old windowed Senokot get the fresh default;
+// fires only while the saved med is still type 'win', so later manual edits persist.
+function migrateSenokotV37(med) {
+  if (!med || med.id !== 'senokot' || med.type === 'gap') return med;
+  return normalizeMedication(deepCopyMeds(DEFAULT_MEDS.filter(m => m.id === 'senokot'))[0]);
+}
+
 function loadMedicationConfig() {
   const fallback = defaultMedicationConfig();
   try {
@@ -193,7 +200,7 @@ function loadMedicationConfig() {
     const saved = JSON.parse(localStorage.getItem(MED_CONFIG_STORAGE_KEY));
     if (!saved || !Array.isArray(saved.meds) || !saved.meds.length) return fallback;
     return {
-      meds: saved.meds.map(normalizeMedication),
+      meds: saved.meds.map(normalizeMedication).map(migrateSenokotV37),
       archivedMeds: normalizeArchivedMeds(saved.archivedMeds)
     };
   } catch (error) {
