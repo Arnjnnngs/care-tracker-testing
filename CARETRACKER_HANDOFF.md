@@ -12,7 +12,7 @@
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 18, 2026
-> **Current version:** v35 (see README.md's versioning convention — this repo's version is always
+> **Current version:** v36 (testing) (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 
 ---
