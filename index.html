@@ -223,7 +223,7 @@ const CONFIG = { patientName: 'Brandi', ceilingMg: 2500, tempUnit: 'Fahrenheit' 
 
 // State
 const initialMedicationConfig = loadMedicationConfig();
-let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false };
+let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, testMissedClearedAt: 0 };
 let toastTimer = null;
 let unsub = null;
 let pendingEntries = null;
@@ -453,6 +453,18 @@ async function logMed(medId, dose, opts) {
   setState({ override: null, timeModal: { type: 'med', medId, dose, opts, timeValue: nowLocalISO() } });
 }
 
+// Backfill a missed dose from History — opens the same log flow, pre-filled to the missed
+// window's scheduled time (editable), bypassing the lock check since this IS the catch-up path.
+function logMissedDose(e) {
+  const med = state.meds.find(m => m.id === e.medId);
+  if (!med) return;
+  const dose = med.doses ? med.doses[0] : null;
+  const d = new Date(e.ts);
+  const pad = n => String(n).padStart(2, '0');
+  const iso = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  setState({ override: null, timeModal: { type: 'med', medId: e.medId, dose, opts: { force: true }, timeValue: iso } });
+}
+
 function tempDefault() { return CONFIG.tempUnit === 'Celsius' ? '36.9' : '98.5'; }
 async function logTemp() {
   const raw = (state.tempInput || '').trim();
@@ -524,7 +536,17 @@ async function confirmTimeAndLog() {
     }
     setToast(ids.length + ' meds logged at ' + fmtTime(ts));
     setTimeout(() => { if (ids.includes('iron')) afterLog({ medId: 'iron', ts, id: 'pending' }); }, 500);
+  } else if (m.type === 'marker') {
+    setState({ timeModal: null });
+    await addEntryDB({ medId: m.medId, dose: null, mg: 0, ts });
+    setToast(m.label + ' logged for ' + new Date(ts).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + fmtTime(ts));
   }
+}
+
+// Opens the time modal for backdating a Cycle/In-Patient start-or-end marker to a day other
+// than today — a lightweight "+" alternative to the instant same-moment log buttons.
+function logMarkerForDay(medId, label) {
+  setState({ timeModal: { type: 'marker', medId, label, timeValue: nowLocalISO() } });
 }
 
 async function removeEntry(id) {
@@ -846,6 +868,8 @@ function renderTimeModal() {
     title = 'Log ' + m.medIds.length + ' meds · ' + m.medIds.map(id => nameOf(id)).join(', ');
   } else if (m.type === 'temp') {
     title = 'Log Temperature · ' + m.tempValue + tempSuffix();
+  } else if (m.type === 'marker') {
+    title = 'Log ' + m.label;
   } else {
     title = 'Log Weight · ' + m.weightValue + ' lbs';
   }
@@ -878,15 +902,16 @@ function renderTimeModal() {
 }
 
 function missedRow(e, i) {
-  return h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderTop: i > 0 ? '1px solid rgba(192,69,59,0.2)' : 'none', background: 'rgba(192,69,59,0.10)', borderLeft: '4px solid #C0453B' } },
+  return h('div', { onClick: () => logMissedDose(e), style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderTop: i > 0 ? '1px solid rgba(192,69,59,0.2)' : 'none', background: 'rgba(192,69,59,0.10)', borderLeft: '4px solid #C0453B', cursor: 'pointer' } },
     h('div', { className: 'mono', style: { fontSize: '13px', color: '#C0453B', fontWeight: '700', minWidth: '66px' } }, fmtTime(e.ts)),
     h('div', { style: { flex: '1' } },
       h('div', { style: { fontSize: '15px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', color: '#C0453B' } },
         nameOf(e.medId),
         h('span', { style: { fontSize: '10.5px', fontWeight: '800', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#fff', background: '#C0453B', borderRadius: '6px', padding: '2px 7px' } }, 'Missed')
       ),
-      h('div', { style: { fontSize: '12.5px', color: '#C0453B', fontWeight: '600' } }, e.windowName + ' window closed — no dose logged')
-    )
+      h('div', { style: { fontSize: '12.5px', color: '#C0453B', fontWeight: '600' } }, e.windowName + ' window closed — tap to log')
+    ),
+    h('span', { style: { flexShrink: '0', fontSize: '11.5px', fontWeight: '800', color: '#C0453B', opacity: '0.7' } }, '›')
   );
 }
 
@@ -921,18 +946,23 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
   // Persistent missed-dose tracking: walk every day since MISSED_TRACK_SINCE so an unresolved
   // miss keeps showing in the banner no matter how many days pass, until an entry actually
   // resolves it (missedDosesFor already treats a late-logged entry as covering its window).
-  const bannerItems = [];
+  const bannerItemsAll = [];
   for (let d = dayStart(MISSED_TRACK_SINCE); d <= dayStart(now); d += 86400000) {
     const label = d === dayStart(now) ? 'Today' : (d === dayStart(now) - 86400000 ? 'Yesterday' : new Date(d).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }));
-    missedDosesFor(d, now).forEach(m => bannerItems.push({ ...m, when: label }));
+    missedDosesFor(d, now).forEach(m => bannerItemsAll.push({ ...m, when: label }));
   }
+  const bannerItems = bannerItemsAll.filter(m => m.ts > (state.testMissedClearedAt || 0));
 
-  // MISSED DOSE ALERT — always on top, cannot be dismissed
+  // MISSED DOSE ALERT — always on top; in testing, a Clear button lets the tester acknowledge
+  // and dismiss the current list without deleting the underlying data (new misses still show).
   if (bannerItems.length) {
     parts.push(h('div', { style: { background: 'rgba(192,69,59,0.16)', border: '2px solid #C0453B', borderRadius: '16px', padding: '15px 16px', display: 'flex', gap: '12px', alignItems: 'flex-start', boxShadow: '0 4px 24px rgba(192,69,59,0.25)' } },
       h('span', { style: { flexShrink: '0', width: '28px', height: '28px', borderRadius: '50%', background: '#C0453B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '17px' } }, '!'),
       h('div', { style: { flex: '1' } },
-        h('div', { style: { fontWeight: '800', color: '#C0453B', fontSize: '15.5px', letterSpacing: '0.02em', marginBottom: '4px', textTransform: 'uppercase' } }, 'Missed dose' + (bannerItems.length > 1 ? 's' : '')),
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '4px' } },
+          h('div', { style: { fontWeight: '800', color: '#C0453B', fontSize: '15.5px', letterSpacing: '0.02em', textTransform: 'uppercase' } }, 'Missed dose' + (bannerItems.length > 1 ? 's' : '')),
+          TEST_MODE ? h('button', { onClick: () => setState({ testMissedClearedAt: state.now }), style: { flexShrink: '0', minHeight: '30px', padding: '0 12px', borderRadius: '99px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '11.5px', fontWeight: '800' } }, 'Clear') : null
+        ),
         h('div', { style: { color: '#A13830', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } },
           bannerItems.map(m => m.when + ': ' + nameOf(m.medId) + ' — ' + m.windowName + ' window (' + fmtTime(m.ts) + ') closed with no dose logged').join(' · '))
       )
@@ -1676,7 +1706,10 @@ function renderCycle(now) {
         'Active'
       ) : null
     ),
-    h('button', { onClick: cycleActiveNow ? logCycleEnd : logCycleStart, style: { marginTop: '12px', width: '100%', minHeight: '52px', borderRadius: '13px', background: cycleActiveNow ? '#9B5B8A' : '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, cycleActiveNow ? 'Log Period End' : 'Log Period Start')
+    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+      h('button', { onClick: cycleActiveNow ? logCycleEnd : logCycleStart, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: cycleActiveNow ? '#9B5B8A' : '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, cycleActiveNow ? 'Log Period End' : 'Log Period Start'),
+      h('button', { onClick: () => logMarkerForDay(cycleActiveNow ? 'cycle_end' : 'cycle_start', cycleActiveNow ? 'Period End' : 'Period Start'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(212,104,138,0.3)', color: '#AA5375', fontSize: '20px', fontWeight: '700' } }, '+')
+    )
   );
 
   const periods = cyclePeriods();
@@ -1711,8 +1744,12 @@ function renderInPatient(now) {
     ),
     activeNow ? h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
       h('button', { onClick: logInpatientEnd, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: '#9A6419', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(110,70,10,0.35)' } }, 'Log In-Patient End'),
+      h('button', { onClick: () => logMarkerForDay('inpatient_end', 'In-Patient End'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+'),
       h('button', { onClick: undoInpatientStart, style: { flexShrink: '0', minHeight: '52px', padding: '0 16px', borderRadius: '13px', background: confirming ? '#C0453B' : 'rgba(255,255,255,0.6)', border: '1px solid ' + (confirming ? '#C0453B' : 'rgba(154,100,25,0.3)'), color: confirming ? '#fff' : '#9A6419', fontSize: '13.5px', fontWeight: '700' } }, confirming ? 'Tap to confirm' : 'Undo')
-    ) : h('button', { onClick: logInpatientStart, style: { marginTop: '12px', width: '100%', minHeight: '52px', borderRadius: '13px', background: '#9A6419', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(110,70,10,0.35)' } }, 'Log In-Patient Start')
+    ) : h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+      h('button', { onClick: logInpatientStart, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: '#9A6419', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(110,70,10,0.35)' } }, 'Log In-Patient Start'),
+      h('button', { onClick: () => logMarkerForDay('inpatient_start', 'In-Patient Start'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+')
+    )
   );
 
   const periods = inpatientPeriods();
