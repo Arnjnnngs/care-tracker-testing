@@ -820,6 +820,9 @@ function render() {
     h('main', { style: { position: 'relative', zIndex: '1', maxWidth: '720px', margin: '0 auto', padding: '16px 16px 20px', display: 'flex', flexDirection: 'column', gap: '18px' } }, ...renderContent(now, mg, pct, tyColor, ceiling)),
     state.toast ? h('div', { style: { position: 'fixed', bottom: 'calc(96px + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', background: 'rgba(60,30,50,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', color: '#fff', padding: '12px 20px', borderRadius: '99px', fontSize: '14px', fontWeight: '600', boxShadow: '0 10px 28px rgba(120,60,90,0.2), 0 0 0 1px rgba(255,255,255,0.3)', zIndex: '50', maxWidth: '90vw', textAlign: 'center', whiteSpace: 'nowrap' } }, state.toast) : null,
     renderTimeModal(),
+    (state.view === 'reports' && state.reportsView) ? h('div', { style: { position: 'fixed', zIndex: '34', left: '0', right: '0', bottom: 'calc(78px + env(safe-area-inset-bottom))', display: 'flex', justifyContent: 'center', pointerEvents: 'none' } },
+      h('button', { onClick: () => setState({ reportsView: null }), style: { pointerEvents: 'auto', minHeight: '42px', padding: '0 18px', borderRadius: '99px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(60,30,50,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', fontSize: '13px', fontWeight: '800', boxShadow: '0 10px 28px rgba(120,60,90,0.22)' } }, '↩ Back')
+    ) : null,
     renderBottomNav(),
     !state.loaded ? h('div', { style: { position: 'fixed', inset: '0', background: 'rgba(255,240,243,0.95)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: '100' } },
       h('div', { style: { textAlign: 'center' } },
@@ -1072,31 +1075,31 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
   // Temperature + Weight row
   parts.push(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: '12px' } },
     // Temperature
-    h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '16px 17px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
+    h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '10px 11px', boxShadow: '0 3px 14px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' } },
         h('div', null,
           h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Temperature'),
-          h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px' } }, tempSubLabel)
+          h('div', { style: { fontSize: '11px', color: '#7D6974', marginTop: '2px' } }, tempSubLabel)
         ),
-        lastTemp ? h('div', { className: 'mono', style: { fontSize: '22px', fontWeight: '600', letterSpacing: '-0.02em', color: tempColor, whiteSpace: 'nowrap' } }, lastTemp.temp + tempSuffix()) : null
+        lastTemp ? h('div', { className: 'mono', style: { fontSize: '18px', fontWeight: '600', letterSpacing: '-0.02em', color: tempColor, whiteSpace: 'nowrap' } }, lastTemp.temp + tempSuffix()) : null
       ),
-      h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: tempDefault(), value: state.tempInput, onInput: (e) => { state.tempInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
-        h('button', { onClick: logTemp, style: { flexShrink: '0', minHeight: '52px', padding: '0 18px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700' } }, 'Log')
+      h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: tempDefault(), value: state.tempInput, onInput: (e) => { state.tempInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 12px', fontSize: '14.5px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
+        h('button', { onClick: logTemp, style: { flexShrink: '0', minHeight: '38px', padding: '0 15px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700' } }, 'Log')
       )
     ),
     // Weight
-    h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '16px 17px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
+    h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '10px 11px', boxShadow: '0 3px 14px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' } },
         h('div', null,
           h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Weight'),
-          h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px' } }, weightSubLabel)
+          h('div', { style: { fontSize: '11px', color: '#7D6974', marginTop: '2px' } }, weightSubLabel)
         ),
-        lastWeight ? h('div', { className: 'mono', style: { fontSize: '22px', fontWeight: '600', letterSpacing: '-0.02em', color: '#3D2B3A', whiteSpace: 'nowrap' } }, lastWeight.weight + ' lbs') : null
+        lastWeight ? h('div', { className: 'mono', style: { fontSize: '18px', fontWeight: '600', letterSpacing: '-0.02em', color: '#3D2B3A', whiteSpace: 'nowrap' } }, lastWeight.weight + ' lbs') : null
       ),
-      h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: weightDefault() || '156.0', value: state.weightInput, onInput: (e) => { state.weightInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
-        h('button', { onClick: logWeight, style: { flexShrink: '0', minHeight: '52px', padding: '0 18px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700' } }, 'Log')
+      h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+        h('input', { type: 'number', inputMode: 'decimal', step: '0.1', placeholder: weightDefault() || '156.0', value: state.weightInput, onInput: (e) => { state.weightInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 12px', fontSize: '14.5px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } }),
+        h('button', { onClick: logWeight, style: { flexShrink: '0', minHeight: '38px', padding: '0 15px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700' } }, 'Log')
       )
     )
   ));
@@ -1587,8 +1590,7 @@ function renderReportDetail(type, now) {
         h('div', { style: { fontSize: '11px', color: '#8E3D61', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Reports'),
         h('h1', { style: { fontSize: '24px', lineHeight: '1.05', color: '#342530', letterSpacing: '-0.035em', marginTop: '5px' } }, report.label),
         h('div', { style: { fontSize: '12.5px', color: '#6E5261', marginTop: '5px', lineHeight: '1.35' } }, report.description)
-      ),
-      h('button', { onClick: () => setState({ reportsView: null }), style: { minHeight: '38px', padding: '0 11px', borderRadius: '11px', display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(170,83,117,0.12)', color: '#8E3D61', border: '1px solid rgba(170,83,117,0.25)', fontSize: '11px', fontWeight: '800', whiteSpace: 'nowrap' } }, '↩ Back')
+      )
     ),
     ...content
   ];
