@@ -1274,7 +1274,8 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
   const todayEntries = state.entries.filter(e => e.ts >= d0 && e.medId !== 'inpatient' && e.medId !== 'inpatient_start' && e.medId !== 'inpatient_end').slice().sort((a, b) => a.ts - b.ts);
   const bucket = timeBucket;
   const tmap = {};
-  [...todayEntries, ...missedToday].sort((a, b) => a.ts - b.ts).forEach(e => { const bk = bucket(e.ts); (tmap[bk] = tmap[bk] || []).push(e); });
+  const missedTodayForJournal = missedDosesFor(now, now);
+  [...todayEntries, ...missedTodayForJournal].sort((a, b) => a.ts - b.ts).forEach(e => { const bk = bucket(e.ts); (tmap[bk] = tmap[bk] || []).push(e); });
   const journalGroups = Object.keys(tmap).map(label => ({ label, minTs: tmap[label][0].ts, items: tmap[label] })).sort((a, b) => a.minTs - b.minTs);
 
   parts.push(h('section', null,
