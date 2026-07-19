@@ -668,6 +668,12 @@ function bowelMovementEntriesByDay() {
   return map;
 }
 function bowelMovementFor(dayStartTs) { return bowelMovementEntriesByDay().get(dayStartTs) || null; }
+function latestBowelDay() {
+  const byDay = bowelMovementEntriesByDay();
+  if (!byDay.size) return null;
+  const days = [...byDay.keys()].sort((a, b) => b - a);
+  return days[0];
+}
 async function logBowelMovement(value, dayStartTs) {
   await addEntryDB({ medId: 'bowel_movement', value, dose: BOWEL_MOVEMENT_LABELS[value] || value, mg: 0, ts: dayStartTs + 12 * 3600000 });
 }
@@ -709,6 +715,20 @@ async function submitBowelMovement(dayStartTs) {
   await logBowelMovement(v, dayStartTs);
   setState({ bowelInput: undefined });
   setToast('Bowel movement logged — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+}
+// Quick-update from the pinned "Bowel Issue Active" banner (mirrors submitBowelMovement, but
+// targets whichever day is currently driving the active streak — not necessarily "yesterday" —
+// and uses its own input field so it never fights with the retrospective card's dropdown.
+async function submitBowelBannerUpdate() {
+  const day = latestBowelDay();
+  const v = state.bowelBannerInput;
+  if (day === null) return;
+  if (!v) { setToast('Select a bowel movement status first'); return; }
+  const existing = bowelMovementFor(day);
+  if (existing) await removeEntryDB(existing.id);
+  await logBowelMovement(v, day);
+  setState({ bowelBannerInput: undefined });
+  setToast('Bowel movement updated — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
 }
 
 // ---- Symptoms tracking ----
@@ -1161,6 +1181,35 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         h('div', { style: { color: '#8A3D66', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } }, cDayN !== null ? ('Day ' + cDayN + ' since period start') : 'Period in progress')
       ),
       h('button', { onClick: logCycleEnd, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, 'Log Period End')
+    ));
+  }
+
+  // Bowel Issue active banner — non-dismissible, pinned like Period/In-Patient. Stays up until
+  // a Normal/Very little answer is logged for the day driving the streak (usually "today" or
+  // "yesterday" depending on whether a Symptoms entry or the retrospective card started it).
+  if (bowelIssueActive()) {
+    const bIssueType = currentBowelIssueType();
+    const bDayN = daysSinceBowelIssueStart();
+    const bIssueLabel = bIssueType === 'diarrhea' ? 'Diarrhea' : 'Constipation';
+    const bBannerValue = state.bowelBannerInput !== undefined ? state.bowelBannerInput : '';
+    parts.push(h('div', { style: { background: 'rgba(161,91,86,0.14)', border: '2px solid #A15B56', borderRadius: '16px', padding: '15px 16px', display: 'flex', flexDirection: 'column', gap: '12px', boxShadow: '0 4px 24px rgba(161,91,86,0.2)' } },
+      h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center' } },
+        h('span', { style: { flexShrink: '0', width: '28px', height: '28px', borderRadius: '50%', background: '#A15B56', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '15px' } }, '!'),
+        h('div', { style: { flex: '1' } },
+          h('div', { style: { fontWeight: '800', color: '#A15B56', fontSize: '15.5px', letterSpacing: '0.02em', marginBottom: '4px', textTransform: 'uppercase' } }, 'Bowel Issue Active'),
+          h('div', { style: { color: '#8A4540', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } }, bIssueLabel + (bDayN !== null ? (' · Day ' + bDayN) : ''))
+        )
+      ),
+      h('div', { style: { display: 'flex', gap: '8px' } },
+        h('select', { value: bBannerValue, onChange: (e) => { state.bowelBannerInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '42px', border: '1px solid rgba(161,91,86,0.3)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A' } },
+          h('option', { value: '' }, 'Update status if back to normal...'),
+          h('option', { value: 'normal' }, 'Normal'),
+          h('option', { value: 'very_little' }, 'Very little'),
+          h('option', { value: 'none' }, 'None'),
+          h('option', { value: 'diarrhea' }, 'Diarrhea')
+        ),
+        h('button', { onClick: submitBowelBannerUpdate, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#A15B56', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,60,55,0.35)' } }, 'Update')
+      )
     ));
   }
 
