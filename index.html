@@ -223,7 +223,7 @@ const CONFIG = { patientName: 'Brandi', ceilingMg: 2500, tempUnit: 'Fahrenheit' 
 
 // State
 const initialMedicationConfig = loadMedicationConfig();
-let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0 };
+let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false };
 let toastTimer = null;
 let unsub = null;
 let pendingEntries = null;
@@ -401,19 +401,16 @@ function status(med) {
   }
   const d0 = dayStart(now), atH = (h) => d0 + h * 3600000;
   const windows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0)) : med.windows;
-  let allUsedToday = true;
   for (const w of windows) {
     const ws = atH(w.start), we = atH(w.end);
     const used = es.some(e => e.ts >= ws && e.ts < we);
     if (used) continue;
-    allUsedToday = false;
     if (now < ws) return { locked: true, availableAt: ws, windowName: w.name };
     if (now >= ws && now < we) return { locked: false, windowName: w.name };
   }
   const chemoOver = med.chemoOnly && !dexActiveOn(d0 + 86400000);
   if (chemoOver) {
-    if (allUsedToday) return { locked: true, courseComplete: true };
-    return { locked: false, lateLog: true };
+    return { locked: true, courseComplete: true };
   }
   const tomorrowWindows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0 + 86400000)) : windows;
   const first = tomorrowWindows[0];
@@ -559,6 +556,7 @@ async function seedDemo() {
 
 // Lock SVG
 const lockSVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#7D6974" stroke-width="2.4"><rect x="4" y="10.5" width="16" height="10" rx="2"></rect><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path></svg>';
+const clockSVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8C5900" stroke-width="2.4"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>';
 
 // ---- Menstrual cycle tracking ----
 // Instant one-tap events, no time picker — logs at the current moment.
@@ -735,7 +733,9 @@ function openReport(report) {
 function renderTestingControls() {
   if (!TEST_MODE) return [];
   const dateValue = (() => { const d = new Date(state.now); const pad = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); })();
-  return [h('details', { style: { background: 'rgba(199,120,0,0.08)', border: '1px dashed rgba(199,120,0,0.52)', borderRadius: '14px', padding: '0 12px', color: '#704B12' } },
+  const detailsAttrs = { style: { background: 'rgba(199,120,0,0.08)', border: '1px dashed rgba(199,120,0,0.52)', borderRadius: '14px', padding: '0 12px', color: '#704B12' }, onToggle: (event) => { state.testDateControlsOpen = event.target.open; } };
+  if (state.testDateControlsOpen) detailsAttrs.open = '';
+  return [h('details', detailsAttrs,
     h('summary', { style: { minHeight: '42px', display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '12px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase' } }, 'Testing date controls'),
     h('div', { style: { padding: '0 0 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
       h('input', { type: 'date', value: dateValue, onInput: (event) => setSimDate(event.target.value), className: 'mono', style: { minHeight: '34px', border: '1px solid rgba(199,120,0,0.35)', borderRadius: '9px', padding: '0 8px', fontSize: '13px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A', colorScheme: 'light' } }),
@@ -910,10 +910,14 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     ));
   }
 
-  const missedToday = missedDosesFor(now, now);
-  // Banner also carries yesterday's misses so an overnight miss is still seen next morning
-  const missedYesterday = missedDosesFor(now - 86400000, now);
-  const bannerItems = [...missedYesterday.map(m => ({ ...m, when: 'Yesterday' })), ...missedToday.map(m => ({ ...m, when: 'Today' }))];
+  // Persistent missed-dose tracking: walk every day since MISSED_TRACK_SINCE so an unresolved
+  // miss keeps showing in the banner no matter how many days pass, until an entry actually
+  // resolves it (missedDosesFor already treats a late-logged entry as covering its window).
+  const bannerItems = [];
+  for (let d = dayStart(MISSED_TRACK_SINCE); d <= dayStart(now); d += 86400000) {
+    const label = d === dayStart(now) ? 'Today' : (d === dayStart(now) - 86400000 ? 'Yesterday' : new Date(d).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }));
+    missedDosesFor(d, now).forEach(m => bannerItems.push({ ...m, when: label }));
+  }
 
   // MISSED DOSE ALERT — always on top, cannot be dismissed
   if (bannerItems.length) {
@@ -1191,10 +1195,13 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
           h('div', { style: { fontSize: '11.5px', color: '#664F5D', fontWeight: '600', whiteSpace: 'nowrap' } }, med.sub)
         ),
         locked ?
-          h('div', { className: 'mono', innerHTML: lockSVG + ' ' + (st.ceilingHit ? 'Limit' : st.chemoBlock ? 'Restricted' : countdownLabel), style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: (st.ceilingHit || st.chemoBlock) ? 'rgba(192,69,59,0.15)' : 'rgba(255,255,255,0.4)', color: (st.ceilingHit || st.chemoBlock) ? '#A15B56' : '#4F5B56', border: '1px solid ' + ((st.ceilingHit || st.chemoBlock) ? 'rgba(192,69,59,0.25)' : 'rgba(212,104,138,0.15)'), borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '600', flexShrink: '0', whiteSpace: 'nowrap' } }) :
-          h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(212,104,138,0.12)', color: '#8E3D61', border: '1px solid rgba(212,104,138,0.28)', borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '700', flexShrink: '0', whiteSpace: 'nowrap' } },
-            h('span', { style: { width: '6px', height: '6px', borderRadius: '50%', background: '#AA5375', display: 'inline-block' } }),
-            'Open'
+          ((st.ceilingHit || st.chemoBlock) ?
+            h('div', { className: 'mono', innerHTML: lockSVG + ' ' + (st.ceilingHit ? 'Limit' : 'Restricted'), style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(192,69,59,0.15)', color: '#A15B56', border: '1px solid rgba(192,69,59,0.25)', borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '600', flexShrink: '0', whiteSpace: 'nowrap' } }) :
+            h('div', { className: 'mono', innerHTML: clockSVG + ' Waiting', style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(199,120,0,0.15)', color: '#8C5900', border: '1px solid rgba(199,120,0,0.32)', borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '700', flexShrink: '0', whiteSpace: 'nowrap' } })
+          ) :
+          h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(15,157,87,0.14)', color: '#0C7F57', border: '1px solid rgba(15,157,87,0.32)', borderRadius: '99px', padding: '4px 8px', fontSize: '11.5px', fontWeight: '700', flexShrink: '0', whiteSpace: 'nowrap' } },
+            h('span', { style: { flexShrink: '0', width: '13px', height: '13px', borderRadius: '50%', background: '#0F9D6B', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '9px', lineHeight: '1' } }, '\u2713'),
+            'Available'
           )
       ),
       // Meta lines
