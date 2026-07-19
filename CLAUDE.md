@@ -42,21 +42,12 @@ promoted to the app Brandi's caregiver actually relies on.
 - `firebase-messaging-sw.js` is present (copied from prod) but effectively unused while `TEST_MODE`
   is on, since the app never registers for a push token here.
 - The visual theme is **light pink glassmorphism**, not dark — don't copy prod's dark-theme
-  descriptions into these docs. Keep Quick Log medication cards compact and phone-dense: medication and
-  generic names share a header line, the status badge stays right-aligned, last-dose/availability share
-  one metadata line, and dose controls stay as inline pills unless a functional requirement requires
-  otherwise. The fixed native-style bottom navigation is the primary information architecture: **Home**
-  contains the former Today flow, **Meds** contains medication management, **Reports** opens History,
-  Weight, and Cycle detail views with a themed back control, and **In-Patient** retains hospital-stay
-  tracking. Do not reintroduce the legacy top-tab strip without explicit approval.
+  descriptions into these docs.
 - This repo currently has features prod does not: the chemo-cycle system (chemo date, Dexamethasone,
   Zofran chemo-day block, chemo banners), missed-dose alerts, menstrual cycle tracking, In-Patient day
-  tracking, a pain-level (1–10) scale on Morphine logs, editable browser-local medication configuration,
-  and Zofran treated as a plain as-needed med (no gap timer, no reminders). The Meds configuration
-  persists only under `caretracker_testing_med_config_v1`; it is not a Firebase collection, is not
-  shared in real time across devices, and must not be represented as a change to medication-entry data.
-  Confirm feature parity/divergence against prod before promoting anything — don't assume the two
-  `index.html` files are close to each other structurally.
+  tracking, a pain-level (1–10) scale on Morphine logs, and Zofran treated as a plain as-needed med
+  (no gap timer, no reminders). Confirm feature parity/divergence against prod before promoting
+  anything — don't assume the two `index.html` files are close to each other structurally.
 - **Versioning matches prod, offset ahead.** This repo's version number is always
   `(current live/pushed prod version) + 1` while testing is ahead of production — e.g. if prod is
   live at v27, testing is v28, and the next testing change becomes v29, and so on, until those
@@ -66,32 +57,22 @@ promoted to the app Brandi's caregiver actually relies on.
   touched. Service worker cache name here is `caretracker-testing-vN` using that same number
   (e.g. `caretracker-testing-v29`), not a separate testing-only counter.
 
-## GitHub web-editor cautions (learned Jul 17, 2026)
+## Working with Aaron — browser tab hygiene
 
-This repo's docs get edited via GitHub's web editor (Find & Replace panel), since the sandbox has no git push credentials. Failure modes that have bitten us here — know them before editing:
-
-**Ctrl+A can wipe the whole file.** If focus isn't actually in the Find/Replace field when you press Ctrl+A, it selects the entire document body instead. Always confirm via screenshot which element has focus before using Ctrl+A or Delete. Triple-click to select existing field text instead of a blind Ctrl+A.
-
-**Multi-line Replace-field content silently truncates.** Typing or pasting a replacement with several embedded newlines (e.g. a multi-paragraph section) into the Replace field only applies the first line/fragment — the rest is silently dropped, with no error shown. Single-line edits are unaffected.
-
-**Multi-line Find patterns can silently match zero results.** Combining two edits into one Find string with an embedded newline can fail to match anything, with Replace All doing nothing and no error shown. Split into separate single-line Find/Replace operations instead.
-
-**The editor auto-continues markdown numbered/bulleted lists.** Typing a line that starts with a digit-dot-space (e.g. "1. ") and then pressing Enter makes the editor auto-insert the next number on the following line — so directly typing your own pre-numbered list corrupts it with duplicated markers (e.g. "2. 2. text"), and can even inject a stray number into an unrelated heading right after the list. Avoid numbered-list syntax when typing multi-line content directly into the editor; use bold lead-in phrases as paragraphs instead, or add list markers in a separate pass after verifying the plain text landed correctly.
-
-**Verified-safe pattern for large multi-line insertions:** use Find-only (leave Replace blank) to locate and highlight an anchor line, press Escape to close the panel (this keeps the highlight), click at the start of the matched line, press Home, then type the full multi-line content directly into the main editor body — bypassing the Replace field entirely.
-
-**Always verify against the live file, not the editor UI.** After every commit, fetch the file from `raw.githubusercontent.com/<owner>/<repo>/main/<file>` and check the actual committed content before declaring a doc update done — don't trust what the editor displayed. Use small boolean/`.includes()` checks rather than dumping large raw content, since large text dumps from raw.githubusercontent.com pages can trigger a false-positive content-block.
-
-**QA loop rule (Aaron, Jul 17, 2026):** after any change, verify against the live/actual state. If anything is found incomplete or wrong, fix it and re-run the entire verification pass from the start — not just the fixed item — before calling the task done.
+- **Close Chrome tabs once you're done verifying in them.** Aaron verifies everything on his phone
+  (mobile app), not by reviewing tabs on desktop — so a live-verification tab has no reason to stay
+  open once the check is complete. Standing rule (Aaron, Jul 19, 2026): close tabs you opened as
+  soon as you're finished with them.
+- **Exception:** leave a tab open only if there's something web-only that Aaron specifically needs
+  to look at himself (e.g. a GitHub Actions log, a page he asked to review). That's not the normal
+  case for this project.
 
 ## Workflow for a new feature request
 
 1. Understand the actual current `index.html` in *this* repo (don't assume it matches prod — it
    frequently doesn't). Read the real file, not stale docs.
 2. Implement against this repo's actual theme, state shape, and existing features so nothing
-   regresses (compact Home cards, bottom navigation, chemo banners, missed-dose alerts, evening-meds
-   flow, etc.). For Meds changes, preserve the browser-local configuration boundary and ensure
-   historical Firebase entries remain intelligible if a medication is archived or deleted.
+   regresses (chemo banners, missed-dose alerts, evening-meds flow, etc.).
 3. Build a mocked-Firestore QA harness and verify both the new behavior and a regression pass over
    existing features.
 4. Update `README.md`'s Version History table (new row, numbered per the versioning rule above)
