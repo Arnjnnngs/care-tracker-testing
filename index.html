@@ -111,11 +111,11 @@ const DEFAULT_MEDS = [
     doses:[{label:'Apply',pills:1,mg:0}] },
   { id:'protonix', name:'Protonix', sub:'Pantoprazole', type:'win', alerts:true, note:'Twice daily · 8 AM & 8 PM',
     windows:[{start:8,end:12,name:'Morning'},{start:20,end:22,name:'Evening'}] },
-  { id:'buspirone', name:'Buspirone', sub:'BuSpar', type:'win', alerts:true, note:'Once daily · 10 PM',
+  { id:'buspirone', name:'Buspirone', sub:'BuSpar', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
     windows:[{start:22,end:24,name:'Night'}] },
-  { id:'paroxetine', name:'Paroxetine', sub:'Paxil', type:'win', alerts:true, note:'Once daily · 10 PM',
+  { id:'paroxetine', name:'Paroxetine', sub:'Paxil', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
     windows:[{start:22,end:24,name:'Night'}] },
-  { id:'iron', name:'Iron', sub:'Ferrous sulfate', type:'win', alerts:true, note:'Once daily · 10 PM',
+  { id:'iron', name:'Iron', sub:'Ferrous sulfate', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
     windows:[{start:22,end:24,name:'Night'}] },
   { id:'senokot', name:'Senokot', sub:'Senna', type:'gap', gapH:0, note:'As needed · 1–2 pills',
     doses:[{label:'1 pill',pills:1,mg:0},{label:'2 pills',pills:2,mg:0}] },
@@ -380,6 +380,25 @@ function fmtDateLabel(ts) {
   return weekday + ', ' + md + ' at ' + time;
 }
 
+// Protonix's evening (PM) dose log time for the given day, if logged yet — the second dose,
+// after its own Morning window (8am-12pm) has closed.
+function protonixEveningLogTs(d0) {
+  const es = entriesFor('protonix');
+  const entry = es.find(e => e.ts >= d0 + 12 * 3600000 && e.ts < d0 + 86400000);
+  return entry ? entry.ts : null;
+}
+
+// Buspirone/Paroxetine/Iron open at 10 PM by default, but if Protonix's evening dose was
+// logged, they instead open 2 hours after that actual log time (so the two are spaced out).
+function eveningWindowsFor(med, d0) {
+  const pTs = protonixEveningLogTs(d0);
+  if (pTs) {
+    const startH = (pTs + 2 * 3600000 - d0) / 3600000;
+    if (startH < 24) return [{ start: Math.max(0, startH), end: 24, name: 'Night' }];
+  }
+  return med.windows; // default: 10 PM
+}
+
 function status(med) {
   const now = state.now;
   if (med.id === 'zofran' && zofranBlockedOn(now)) {
@@ -400,7 +419,7 @@ function status(med) {
     return { locked: now < at, availableAt: at };
   }
   const d0 = dayStart(now), atH = (h) => d0 + h * 3600000;
-  const windows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0)) : med.windows;
+  const windows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0)) : med.eveningLinkedToProtonix ? eveningWindowsFor(med, d0) : med.windows;
   for (const w of windows) {
     const ws = atH(w.start), we = atH(w.end);
     const used = es.some(e => e.ts >= ws && e.ts < we);
@@ -915,8 +934,11 @@ function missedRow(e, i) {
   );
 }
 
+// Weight and Cycle markers aren't part of the medication dosing safety chain the 48h lock
+// protects, so they stay editable/removable indefinitely (data-entry corrections only).
+const BYPASS_48H_IDS = new Set(['weight', 'cycle_start', 'cycle_end']);
 function removeBtn(e) {
-  if (state.now - e.ts > 48 * 3600000) return null; // entries older than 48h are permanent history
+  if (!BYPASS_48H_IDS.has(e.medId) && state.now - e.ts > 48 * 3600000) return null; // entries older than 48h are permanent history
   if (state.confirmRemove === e.id) {
     return h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexShrink: '0' } },
       h('button', { onClick: () => { setState({ confirmRemove: null }); removeEntry(e.id); }, style: { color: '#fff', background: '#C0453B', fontSize: '12.5px', fontWeight: '700', padding: '8px 12px', borderRadius: '9px' } }, 'Delete'),
@@ -1011,6 +1033,25 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         h('div', { style: { color: '#8A3D66', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } }, cDayN !== null ? ('Day ' + cDayN + ' since period start') : 'Period in progress')
       ),
       h('button', { onClick: logCycleEnd, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, 'Log Period End')
+    ));
+  }
+
+  // Weight-not-logged-today alert — persistent, and visually escalates as the day goes on
+  // without a reading: quiet reminder in the morning, firmer by afternoon, urgent by evening.
+  const weightLoggedToday = state.entries.some(e => e.medId === 'weight' && e.ts >= dayStart(now));
+  if (!weightLoggedToday) {
+    const hourNow = new Date(now).getHours();
+    const level = hourNow >= 18 ? 2 : hourNow >= 12 ? 1 : 0; // 0 quiet, 1 firm, 2 urgent
+    const wColor = level === 2 ? '#C0453B' : level === 1 ? '#9A6419' : '#8E3D61';
+    const wBg = level === 2 ? 'rgba(192,69,59,0.14)' : level === 1 ? 'rgba(154,100,25,0.12)' : 'rgba(170,83,117,0.10)';
+    const wBorder = level === 2 ? '2px solid #C0453B' : level === 1 ? '2px solid #9A6419' : '1px solid rgba(170,83,117,0.3)';
+    const wMsg = level === 2 ? 'Still no weight logged today — please log it before the day ends.' : level === 1 ? 'No weight logged yet today. A daily reading helps track trends.' : 'Weight hasn’t been logged yet today.';
+    parts.push(h('div', { style: { background: wBg, border: wBorder, borderRadius: '16px', padding: '14px 16px', display: 'flex', gap: '12px', alignItems: 'center', boxShadow: level ? ('0 4px 24px rgba(' + (level === 2 ? '192,69,59' : '154,100,25') + ',0.18)') : 'none' } },
+      h('span', { style: { flexShrink: '0', width: '26px', height: '26px', borderRadius: '50%', background: wColor, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '13px' } }, '⚖'),
+      h('div', { style: { flex: '1' } },
+        h('div', { style: { fontWeight: '800', color: wColor, fontSize: '14px', letterSpacing: '0.02em', marginBottom: '2px', textTransform: 'uppercase' } }, 'Daily Weight'),
+        h('div', { style: { color: wColor, fontSize: '13.5px', fontWeight: '600', lineHeight: '1.4' } }, wMsg)
+      )
     ));
   }
 
@@ -1254,9 +1295,13 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     );
   });
 
+  const quickLogOpen = state.quickLogOpen !== false; // default open
   parts.push(h('section', null,
-    h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479' } }, 'Quick log'),
-    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '8px', marginTop: '8px' } }, ...medCards)
+    h('div', { onClick: () => setState({ quickLogOpen: !quickLogOpen }), style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' } },
+      h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479' } }, 'Quick log' + (quickLogOpen ? '' : ' (' + medCards.length + ')')),
+      h('span', { style: { fontSize: '10px', color: '#8A6479' } }, quickLogOpen ? '▲' : '▼')
+    ),
+    quickLogOpen ? h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '8px', marginTop: '8px' } }, ...medCards) : null
   ));
 
   // Evening meds — one grouped card (Buspirone, Paroxetine, Iron, Compazine)
