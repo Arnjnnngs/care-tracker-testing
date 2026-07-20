@@ -35,6 +35,7 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v55 | Jul 20, 2026 | v54 | **Appetite + Bowel Movement moved to persistent Home alerts (matching Daily Weight).** Per Aaron's request, both retrospective daily check-ins now behave like the existing Daily Weight card: a persistent, escalating "must be answered" alert on Home (quiet before noon, firmer through the afternoon, urgent by evening — sharing the exact same `dailyAlertLevel()`/`dailyAlertStyle()` rules as Weight) that disappears the moment yesterday's entry is logged. Appetite's dropdown+notes input moved off Reports entirely; Bowel Movement's old always-visible quiet card (previously sitting under Weight) was replaced by the new alert. **Reports → Appetite** and the new **Reports → Bowel Movement** tab are now history-only — no input controls, just a reviewable/removable list; removing an entry there makes its Home alert reappear since the day becomes unanswered again. Also fixed a logic gap this change exposed: the "Bowel Issue Active" banner used to defer to the old always-visible retrospective card when they targeted the same day ("Update using the Bowel Movement card below"); since that card no longer stays visible once answered, the banner now always renders its own inline control instead. QA'd with a mocked Firestore harness: a new 25/25 suite (`test_daily_alerts_v54.js`) covering escalation tiers, hide-on-answer for both alerts, and the two new history-only Reports pages, plus the existing `test_bowel_dedup.js` suite rewritten for the new banner behavior (10/10) and a full regression pass (29/29 Tylenol Liquid/Appetite, 15/15 + 10/10 missed-dose, 7/7 bowel-update) — 96/96 total. | Testing |
 | v54 | Jul 20, 2026 | v53 | **Tylenol Liquid + Appetite tracking.** New medication, Tylenol Liquid (Acetaminophen, oral suspension): 30 mL (1000 mg) per dose, its own independent 6-hour gap (separate from pill Tylenol's 4-hour gap), and its own 90 mL/24h volume ceiling — logged as a distinct medication (`tylenol-liquid`) rather than folded into the existing Tylenol card, so a toast/dose picker never has to ask "pills or liquid?" and the two forms can't be confused in History. The two forms *share* the existing 2,500 mg/24h Tylenol daily ceiling via a new `ceilingGroup` mechanism — logging either form counts against the same combined total, and hitting the shared cap locks both. Volume and mg ceilings are tracked independently: it's possible to be locked on the 90 mL liquid cap while still under the 2,500 mg shared cap, or vice versa, and the lock reason (ceiling badge) reflects whichever was actually hit. Also added Appetite tracking: a new **Reports → Appetite** tab asks about the previous day's appetite (Normal / Little to none / No Appetite, via dropdown) with an optional notes field for the reason, following the same retrospective one-entry-per-day pattern as Bowel Movement (Update overwrites the existing day's entry rather than appending) and the same 48-hour edit-lock bypass, so a day's answer stays correctable. Appetite History lists past entries with a color-coded status dot. QA'd with a mocked Firestore harness, 29/29 new checks (dose shape, independent gap timers, shared-ceiling math across both forms, independent volume ceiling, Appetite submit/overwrite/empty-rejection/history/Reports rendering) plus a 25/25 regression pass across the existing missed-dose, bowel-movement, and bowel-dedup suites. | Testing |
 | v53 | Jul 20, 2026 | v52 | **Incident recovery: GitHub web-editor commit wiped `index.html`, `sw.js`, and `TESTING_HANDOFF.md`.** Overnight, a commit titled "v53: morphine half-dose window tracking, bump SW cache" was pushed directly to `main` through GitHub's inline web editor and replaced the entire contents of those three files with the literal text `undefined` (a paste-gone-wrong — GitHub's file editor has no diff preview before commit, so a bad clipboard paste silently becomes the whole file). No Morphine half-dose feature was actually built; the commit only destroyed files, and production was never touched. Live impact: the app served a blank/broken page, and a client-side cache reset (correctly tried first) could not fix it since the *server* was serving the broken file, not a stale client copy. Diagnosed via direct `fetch()` of the live files (200 OK, 9-byte `"undefined"` body) and the GitHub commit API (`+3 -2,944` lines across exactly those 3 files). Fixed by restoring all three files byte-for-byte from the last-known-good commit and bumping the SW cache to force every client to refresh. New standing rule: never paste replacement content into GitHub's inline web editor — always edit locally and push a real diff. | Testing |
 | v52 | Jul 19, 2026 | v51 | **Fix: redundant Bowel Issue banner Update control.** When a Bowel Issue is active, the pinned "Bowel Issue Active" banner and the retrospective "Bowel Movement" card can render at once, each showing what looks like an identical select+Update control, but they don't always target the same day. Fixed per Aaron's request for a design recommendation: when the banner's target day and the card's target day are the same, the banner now shows a pointer message instead of a duplicate control ("Update using the Bowel Movement card below."); when the days genuinely differ, the banner keeps its own control but now explicitly labels which day it updates (e.g. "Update status for today"). QA'd with a mocked Firestore harness, 8/8 new checks plus a 24/24 full regression pass alongside the v50/v51 suites. Verified live with a temporary test Firestore entry (created, screenshotted, deleted). | Testing |
@@ -118,7 +119,7 @@ gap-based push reminder system that exists in production does not run here at al
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v54` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v55` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
@@ -153,26 +154,43 @@ Journal, or in History. **The banner has a Clear button (v50, Firestore-backed v
 
 ## Bowel Movement Tracking
 
-A retrospective daily card (under Weight) asks about the previous day's bowel movement (Normal /
-Very little / None / Diarrhea); logging Diarrhea or Constipation on the Symptoms tab also
-starts (never ends) the same tracker for that entry's day, if that day doesn't already have its own
-answer. Consecutive days of None/Diarrhea count as an active "Bowel Issue," shown via a pinned,
-non-dismissible **Bowel Issue Active** banner on Home (v49) with its own quick-update control — note
-this banner's Update button and the retrospective card's Update button are two distinct controls that
-can appear on screen together: the banner always updates whichever day is currently driving the
-active streak, while the retrospective card always updates yesterday specifically, regardless of the
-banner. **Both Update paths now report save failures instead of failing silently (v51)** — see the
-v51 row in the Version History table above.
+**As of v55, the daily check-in lives on Home as a persistent "must be answered" alert** (same rules
+as Daily Weight, see below) rather than an always-visible quiet card — it only appears while
+yesterday is unanswered, escalating from a quiet reminder before noon to firm in the afternoon to
+urgent by evening, and disappears the instant yesterday's entry is logged. Logging Diarrhea or
+Constipation on the Symptoms tab also starts (never ends) the same tracker for that entry's day, if
+that day doesn't already have its own answer. Consecutive days of None/Diarrhea count as an active
+"Bowel Issue," shown via a separate pinned, non-dismissible **Bowel Issue Active** banner on Home
+(v49) with its own inline update control, positioned directly below the retrospective alert — **as of
+v55 this banner always shows its own control** (it previously deferred to the retrospective card when
+they targeted the same day, back when that card stayed visible permanently; now that the card only
+shows when unanswered, there's nothing left to defer to). **Reports → Bowel Movement (new in v55)** is
+a history-only list of past entries — no input there; removing an entry makes the Home alert reappear
+for that day. **Both save paths report failures instead of failing silently (v51)**.
 
 ## Appetite Tracking
 
-Available at **Reports → Appetite** (v54). A retrospective daily card asks about the previous day's
-appetite via dropdown (Normal / Little to none / No Appetite), with an optional notes field to record
-the reason. Follows the same one-entry-per-day pattern as Bowel Movement: submitting again for the
-same day overwrites the existing entry rather than adding a second one. Appetite History lists past
-entries sorted most-recent-first with a color-coded status dot (green/amber/red) and the optional
-note. Entries bypass the normal 48-hour edit lock, same as Weight, Cycle, and Bowel Movement, so a
-day's answer stays correctable.
+**As of v55, the daily check-in lives on Home as a persistent "must be answered" alert**, matching
+Bowel Movement and Daily Weight exactly (same escalation rules, same hide-once-answered behavior) —
+it asks about the previous day's appetite via dropdown (Normal / Little to none / No Appetite) with
+an optional notes field, right on Home instead of a Reports-page input card. **Reports → Appetite is
+now history-only** (the dropdown/notes input that lived there through v54 was removed) — it just
+lists past entries sorted most-recent-first with a color-coded status dot (green/amber/red) and the
+optional note; removing an entry there makes the Home alert reappear since the day becomes unanswered
+again. Submitting again for an already-answered day (via the Home alert, before it's answered) still
+overwrites rather than duplicates. Entries bypass the normal 48-hour edit lock, same as Weight, Cycle,
+and Bowel Movement.
+
+## Daily "Must Be Answered" Home Alerts (Weight, Bowel Movement, Appetite)
+
+Weight, Bowel Movement, and Appetite each get a persistent Home alert that only appears while that
+day's entry is missing, sharing one set of escalation rules (`dailyAlertLevel()`/`dailyAlertStyle()`
+in `index.html`): quiet (lavender) before noon, firm (amber) from noon–6 PM, urgent (red) from 6 PM
+on. Weight asks about **today**; Bowel Movement and Appetite ask about **yesterday** (retrospective).
+Each alert disappears the moment its entry is logged — Weight always keeps its separate always-present
+quiet input card too (for logging additional readings), but Bowel Movement and Appetite do not, since
+they're one-answer-per-day fields: once answered, correcting a mistake is done via the matching
+Reports history list (Remove, then the Home alert reappears since the day is unanswered again).
 
 ## Chemo Cycle
 
@@ -193,9 +211,9 @@ The fixed bottom navigation is present on every primary route: **Home**, **Meds*
 **In-Patient**. It replaces the former top-tab bar and reserves bottom safe-area space on phone-sized
 screens.
 
-- **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner (with persistent Clear button, v50), Bowel Issue Active banner (pinned, only when an issue streak is active, v49), chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
+- **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner (with persistent Clear button, v50), Bowel Issue Active banner (pinned, only when an issue streak is active, v49), the Bowel Movement and Appetite "must be answered" alerts (v55 — only while yesterday is unanswered), the Daily Weight "must be answered" alert (only while today is unanswered), chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
 - **Meds** — medication-management page for the active configuration. It lists each medication's display/generic names, dose options, gap/frequency rules, daily limit, and schedule type; supports Add, Edit, and confirmation-protected Delete. The configuration persists in browser-local storage only; dose and vitals history remains in the existing Firestore test collection.
-- **Reports** — a menu of four cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), **Cycle** (Menstrual Cycle Start/End card plus Cycle History), and **Appetite** (v54 — previous-day dropdown plus optional notes, with Appetite History below it). Each detail view has a themed right-aligned back control to return to Reports.
+- **Reports** — a menu of five cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), **Cycle** (Menstrual Cycle Start/End card plus Cycle History), **Bowel Movement** (v55, new — history-only, no input), and **Appetite** (history-only as of v55 — the input moved to a Home alert; just Appetite History here). Each detail view has a themed right-aligned back control to return to Reports.
 - **In-Patient** — Start/End/Undo card plus a history list of hospital stays with real start/end timestamps.
 - **Symptoms** — ad hoc, timestamped incident logging (Nausea, Vomiting, Diarrhea, Constipation), fully editable/deletable, no 48h lock.
 

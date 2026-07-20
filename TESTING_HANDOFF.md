@@ -14,13 +14,13 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 20, 2026
-> **Current version:** v54 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v55 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in TESTING_README.md at the time. See TESTING_README's table for a placeholder note
 > and Section 9 below — flagged to Aaron on Jul 19, 2026 for a decision on backfilling from commit
-> history as a separate pass. v50–v54 are fully documented.
+> history as a separate pass. v50–v55 are fully documented.
 >
 > **Never edit `index.html` or `sw.js` directly through GitHub's web editor.** On the night of Jul
 > 19–20, 2026, a direct web-editor commit (titled "v53: morphine half-dose window tracking, bump SW
@@ -191,34 +191,64 @@ Production's preferences collection. **This app must never write here.**
   form consistently. If adding another custom-id medication in the future, either avoid underscores
   in the chosen id or always resolve the id via `state.meds.find(...).id` rather than a hardcoded string.
 
-### Appetite tracking (v54)
-- New Reports tab, following the same retrospective one-entry-per-day pattern already established by
-  Bowel Movement: `appetiteEntriesByDay()` builds a `Map` keyed by `dayStart(ts)` (last-write-wins per
-  day), `appetiteFor(dayStartTs)` looks up a single day, `appetiteHistorySorted()` returns every day's
-  entry most-recent-first.
+### Appetite tracking (added v54, moved to a Home alert v55)
+- Retrospective one-entry-per-day pattern, same as Bowel Movement: `appetiteEntriesByDay()` builds a
+  `Map` keyed by `dayStart(ts)` (last-write-wins per day), `appetiteFor(dayStartTs)` looks up a single
+  day, `appetiteHistorySorted()` returns every day's entry most-recent-first.
 - `logAppetite(value, dayStartTs, note)` writes one entry: `medId: 'appetite'`, `value` (raw
   `'normal' | 'little' | 'none'`), `dose` (human label via `APPETITE_LABELS`), `mg: 0`, `ts: dayStartTs
   + 12h` (midday, so the entry sorts predictably regardless of what time it was actually logged), and
   an optional `note` field only when the caregiver typed one (empty/whitespace-only notes are trimmed
   and omitted, not stored as an empty string).
-- `submitAppetite(dayStartTs)` — the Update/Log handler: rejects with a toast if no dropdown value is
-  selected, otherwise deletes that day's existing entry (if any) and adds the new one (overwrite, not
-  append — same delete-then-add pattern as Bowel Movement), wrapped in try/catch per the silent-failure
-  lesson from the v51 Bowel Movement fix (Section 6 above) so a save failure always surfaces a toast
-  rather than failing invisibly.
-- UI (`renderAppetite()`, **Reports → Appetite**): a card showing yesterday's current status (or
-  "Not yet logged"), a `<select>` (Select… / Normal / Little to none / No Appetite) bound to
-  `state.appetiteInput`, an optional `<textarea>` (placeholder "Reason (optional)") bound to
-  `state.appetiteNoteInput`, and an Update/Log button. Below it, an Appetite History list built from
-  `appetiteHistorySorted()`, each row showing the date, the value label, the optional note, a
-  color-coded status dot (green `#0F9D6B` normal / amber `#C77800` little / red `#C0453B` none), and a
-  remove control.
+- `submitAppetite(dayStartTs)` — the Log handler: rejects with a toast if no dropdown value is
+  selected, otherwise deletes that day's existing entry (if any, relevant when re-answering after a
+  Remove) and adds the new one (overwrite, not append — same delete-then-add pattern as Bowel
+  Movement), wrapped in try/catch per the silent-failure lesson from the v51 Bowel Movement fix so a
+  save failure always surfaces a toast rather than failing invisibly.
+- **v55 UI change:** the input (select + optional notes textarea + button) moved off Reports entirely
+  and now lives in `renderToday()` as a Home alert — see "Daily 'must be answered' Home alerts" below.
+  `renderAppetite()` (**Reports → Appetite**) is now history-only: just the Appetite History list
+  built from `appetiteHistorySorted()`, each row showing the date, the value label, the optional note,
+  a color-coded status dot (green `#0F9D6B` normal / amber `#C77800` little / red `#C0453B` none), and
+  a remove control. Removing an entry there makes the Home alert reappear for that day, since
+  `appetiteFor(yesterdayStart(now))` becomes `null` again.
 - `appetite` was added to `BYPASS_48H_IDS` (alongside `weight`, `cycle_start`, `cycle_end`,
   `bowel_movement`) so a day's answer stays editable/removable past the normal 48-hour permanent-
   history lock, matching the other retrospective daily-entry features.
 - `reportDescriptor('appetite', now)` supplies the Reports-menu card's label/icon/meta (meta text
   pulls from `appetiteFor(yesterdayStart(now))` so the menu card previews yesterday's answer without
   opening the detail view).
+
+### Daily "must be answered" Home alerts (v55) — Weight, Bowel Movement, Appetite
+Weight already had a persistent, escalating Home alert (added earlier as "Batch G"); v55 gives Bowel
+Movement and Appetite the identical treatment, per Aaron's explicit request that they "appear like the
+Weight card where it is persistent until answered."
+- `dailyAlertLevel(now)` — shared escalation-tier function (near `yesterdayStart`): returns `0`
+  (quiet) before noon, `1` (firm) from noon–6 PM, `2` (urgent) from 6 PM on, based on `new
+  Date(now).getHours()`. `dailyAlertStyle(level)` returns the matching `{ color, bg, border, shadow }`
+  — lavender/amber/red, same values Daily Weight always used. All three alerts call these same two
+  functions, so "the same rules as Weight" is enforced structurally, not just visually similar.
+- Each alert only renders while its target day is unanswered, and disappears the instant it's logged
+  — Weight checks `state.entries.some(e => e.medId === 'weight' && e.ts >= dayStart(now))` (asks about
+  **today**, since Weight can be logged multiple times/day); Bowel Movement checks
+  `!bowelMovementFor(yesterdayStart(now))` and Appetite checks `!appetiteFor(yesterdayStart(now))`
+  (both ask about **yesterday**, being retrospective one-answer-per-day fields).
+- Unlike Weight, Bowel Movement and Appetite have **no separate always-present quiet input card** —
+  once answered, the only way to change that day's answer is via the matching Reports history list
+  (Remove, then the alert reappears since the day is unanswered again). This is an intentional
+  tradeoff: Weight supports multiple readings/day so its quiet card stays useful even after logging;
+  Bowel Movement/Appetite are single-answer-per-day, so there's nothing left to log once answered.
+- Render order on Home: Missed Doses → Chemo plan → Period Active → Bowel Issue Active → **Bowel
+  Movement alert** → **Appetite alert** → Daily Weight alert → Demo/Warning banners → vitals/meds.
+- **Bowel Issue Active banner logic change (v55):** this banner used to omit its own inline control
+  and show a pointer message ("Update using the Bowel Movement card below") whenever its target day
+  equaled yesterday, because the old retrospective card was always visible below it and duplicating a
+  second identical control would've been confusing. Now that the retrospective control only shows
+  while yesterday is unanswered, the "same day" case can only happen when yesterday **is** answered
+  (that's what makes `bowelIssueActive()` true for that day in the first place) — meaning the card it
+  used to point at is always hidden in that exact scenario. The pointer-message branch was removed
+  entirely; the banner now **always** renders its own inline control, labeled with whichever day it
+  targets (`bannerDayLabel`). See `test_bowel_dedup.js`, rewritten for this behavior.
 
 ### Vitals
 - **Temperature** — °F. Input shows `tempDefault()` (`98.5`) as an HTML `placeholder` (grayed hint
@@ -352,24 +382,31 @@ manual testing:
   `TEST_MODE` forced to `false` — the header control doesn't render, and `shiftSimDate()`/
   `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
 
-### Bowel Movement & Symptoms tracking (v48–v49)
-Added a **Bowel Movement** retrospective daily card (under Weight) and a **Symptoms** bottom-nav tab
-for logging non-medication health events, plus a pinned **Bowel Issue Active** banner on Home (v49)
-mirroring the pattern already established by the Period Active and In-Patient Active banners. This
-section is intentionally brief pending the v38–v49 documentation backfill noted at the top of this
-file and in Section 9 — see the actual `index.html` for the current implementation details until
-that pass is done.
+### Bowel Movement & Symptoms tracking (v48–v49; retrospective card became a Home alert v55)
+Added a **Bowel Movement** retrospective daily check-in and a **Symptoms** bottom-nav tab for logging
+non-medication health events, plus a pinned **Bowel Issue Active** banner on Home (v49) mirroring the
+pattern already established by the Period Active and In-Patient Active banners. This section is
+intentionally brief pending the v38–v49 documentation backfill noted at the top of this file and in
+Section 9 — see the actual `index.html` for the current implementation details until that pass is
+done. **The retrospective check-in itself moved from an always-visible quiet card (under Weight) to a
+persistent, escalating Home alert in v55** — see "Daily 'must be answered' Home alerts (v55)" above
+for the current mechanism (`dailyAlertLevel`/`dailyAlertStyle`, hides once yesterday is answered).
 
 **Two distinct Update controls (important for debugging).** When a Bowel Issue is active, both the
-pinned banner and the retrospective card render at the same time, and both look like a "select a
-status, tap Update" control — but `submitBowelBannerUpdate()` (banner) always targets
-`latestBowelDay()` (whichever day is currently driving the active streak — often today), while
-`submitBowelMovement()` (retrospective card) always targets yesterday specifically, regardless of
-what the banner is doing. **As of v52, the banner suppresses its own control (showing a pointer
-message instead) whenever its target day is the same as the card's** — so only one visible Update
-control exists at a time unless the two days genuinely differ, in which case the banner's control is
-explicitly labeled with the day it targets (e.g. "Update status for today"). If a user reports one of
-these "not doing anything," check which control they actually used before assuming the write failed.
+pinned "Bowel Issue Active" banner and the retrospective alert directly below it can render at the
+same time — `submitBowelBannerUpdate()` (banner) always targets `latestBowelDay()` (whichever day is
+currently driving the active streak — often today), while `submitBowelMovement()` (retrospective
+alert) always targets yesterday specifically, regardless of what the banner is doing. **v52 through
+v54:** the banner suppressed its own control (showing a pointer message, "Update using the Bowel
+Movement card below") whenever its target day matched the card's, since the card was always visible
+and a second identical control would've been redundant. **v55:** that pointer-message branch was
+removed. Since the retrospective alert now only renders while yesterday is unanswered, the "banner
+targets yesterday" case can only occur when yesterday already has an answer (that's what makes the
+issue streak active) — meaning the retrospective alert is always hidden in exactly that scenario, so
+there's nothing left to defer to. The banner now **always** shows its own inline control, explicitly
+labeled with whichever day it targets (e.g. "Update status for today" / "…for yesterday"). If a user
+reports one of these "not doing anything," check which control they actually used before assuming the
+write failed.
 
 **Silent-failure fix (v51).** Both functions used a delete-old-entry-then-add-new-entry pattern with
 no error handling — if either Firestore call failed for any reason, the async function threw and
@@ -381,7 +418,7 @@ See the v51 entry in Version History below.
 
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v54` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v55` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -457,6 +494,34 @@ were corrupted and a cache reset understandably did nothing).
 See TESTING_README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v55 — July 20, 2026
+
+**Appetite + Bowel Movement moved to persistent Home alerts (matching Daily Weight).** Aaron asked
+for both retrospective daily check-ins to "appear like the Weight card where it is persistent until
+answered." Implemented by factoring Daily Weight's existing escalation logic into two shared
+functions, `dailyAlertLevel(now)` and `dailyAlertStyle(level)` (quiet before noon, firm noon–6 PM,
+urgent 6 PM+), and building new Bowel Movement and Appetite Home alerts on top of them that render
+only while yesterday is unanswered and disappear the instant it's logged — Daily Weight itself was
+refactored to use the same two functions rather than its own copy of the logic, so all three alerts
+now share one implementation instead of three near-identical ones. Appetite's dropdown+notes input
+moved off Reports entirely onto this new Home alert; **Reports → Appetite** is now history-only.
+Bowel Movement's old always-visible quiet card (previously sitting under Weight, with an Update
+button that worked even after answering) was replaced by the new hide-once-answered alert; a new
+**Reports → Bowel Movement** tab was added, also history-only, so past entries are still reviewable
+and removable. Removing an entry from either history list makes its Home alert reappear, since the
+day becomes unanswered again — this is now the correction path for a wrong answer, replacing the old
+"just re-select and hit Update" flow. Fixed a logic gap this exposed: the "Bowel Issue Active" banner
+used to defer to the old always-visible retrospective card ("Update using the Bowel Movement card
+below") whenever they targeted the same day; since that card no longer stays visible once answered,
+the banner now always renders its own inline control instead — the old pointer-message branch was
+dead code that would have pointed at nothing. QA: mocked-Firestore harness, a new 25/25 suite
+(`test_daily_alerts_v54.js`) covering escalation tiers for both new alerts, hide-on-answer, and the
+two history-only Reports pages; `test_bowel_dedup.js` rewritten for the new always-own-control banner
+behavior (10/10); full regression pass across `test_tylenol_liquid_appetite.js` (29/29, one assertion
+updated to match Reports > Appetite no longer having a dropdown), `test_missed_clear_testing.js`
+(15/15), `test_bowel_update_fix.js` (7/7), `test_missed_clear.js` (10/10) — 96/96 total. `sw.js`
+cache bumped to `caretracker-testing-v55`.
 
 ### v54 — July 20, 2026
 

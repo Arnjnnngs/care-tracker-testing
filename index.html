@@ -719,6 +719,20 @@ function fmtCyclePeriod(p) {
 const BOWEL_ISSUE_VALUES = new Set(['none', 'diarrhea']);
 const BOWEL_MOVEMENT_LABELS = { normal: 'Normal', very_little: 'Very little', none: 'None', diarrhea: 'Diarrhea' };
 function yesterdayStart(now) { return dayStart(now) - 86400000; }
+// Shared "must be answered today" escalation rules — quiet reminder in the morning, firmer by
+// afternoon, urgent by evening. Used by the Daily Weight, Bowel Movement, and Appetite Home
+// alerts so all three escalate identically rather than each having its own copy of the logic.
+function dailyAlertLevel(now) {
+  const hourNow = new Date(now).getHours();
+  return hourNow >= 18 ? 2 : hourNow >= 12 ? 1 : 0; // 0 quiet, 1 firm, 2 urgent
+}
+function dailyAlertStyle(level) {
+  const color = level === 2 ? '#C0453B' : level === 1 ? '#9A6419' : '#8E3D61';
+  const bg = level === 2 ? 'rgba(192,69,59,0.14)' : level === 1 ? 'rgba(154,100,25,0.12)' : 'rgba(170,83,117,0.10)';
+  const border = level === 2 ? '2px solid #C0453B' : level === 1 ? '2px solid #9A6419' : '1px solid rgba(170,83,117,0.3)';
+  const shadow = level ? ('0 4px 24px rgba(' + (level === 2 ? '192,69,59' : '154,100,25') + ',0.18)') : 'none';
+  return { color, bg, border, shadow };
+}
 function bowelMovementEntriesByDay() {
   const map = new Map();
   state.entries.filter(e => e.medId === 'bowel_movement').forEach(e => {
@@ -735,6 +749,7 @@ function latestBowelDay() {
   const days = [...byDay.keys()].sort((a, b) => b - a);
   return days[0];
 }
+function bowelMovementHistorySorted() { return [...bowelMovementEntriesByDay().values()].sort((a, b) => b.ts - a.ts); }
 async function logBowelMovement(value, dayStartTs) {
   await addEntryDB({ medId: 'bowel_movement', value, dose: BOWEL_MOVEMENT_LABELS[value] || value, mg: 0, ts: dayStartTs + 12 * 3600000 });
 }
@@ -1293,15 +1308,13 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
 
   // Bowel Issue active banner — non-dismissible, pinned like Period/In-Patient. Stays up until
   // a Normal/Very little answer is logged for the day driving the streak (usually "today" or
-  // "yesterday" depending on whether a Symptoms entry or the retrospective card started it).
-  //
-  // The retrospective "Bowel Movement" card below always edits yesterday specifically. This
-  // banner edits whichever day is currently driving the active streak (bannerDay), which is
-  // often today but can coincide with yesterday. When they'd target the SAME day, showing two
-  // separate dropdown+Update controls is pure duplication and a real source of confusion — so
-  // in that case this banner omits its own control and points down at the card instead. When
-  // they genuinely differ, both stay, but the day being edited is now labeled explicitly so
-  // it's never ambiguous which control does what.
+  // "yesterday" depending on whether a Symptoms entry or the retrospective alert started it).
+  // Always shows its own inline control — the retrospective "Bowel Movement" alert directly below
+  // only ever appears when YESTERDAY is unanswered, and this banner's bannerDay can only equal
+  // yesterday once yesterday already has an entry, so the two controls' visible windows never
+  // actually overlap (v54 note: prior to the Bowel Movement alert hiding-once-answered redesign,
+  // this banner used to defer to a card that was always on screen; that card no longer always
+  // renders, so deferring to it is no longer valid and this banner must always show its own control).
   if (bowelIssueActive()) {
     const bIssueType = currentBowelIssueType();
     const bDayN = daysSinceBowelIssueStart();
@@ -1309,7 +1322,6 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     const bBannerValue = state.bowelBannerInput !== undefined ? state.bowelBannerInput : '';
     const bannerDay = latestBowelDay();
     const retroDay = yesterdayStart(now);
-    const sameDayAsCard = bannerDay !== null && bannerDay === retroDay;
     const bannerDayLabel = bannerDay === dayStart(now) ? 'today'
       : bannerDay === retroDay ? 'yesterday'
       : new Date(bannerDay).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
@@ -1321,39 +1333,107 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
           h('div', { style: { color: '#8A4540', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } }, bIssueLabel + (bDayN !== null ? (' · Day ' + bDayN) : ''))
         )
       ),
-      sameDayAsCard
-        ? h('div', { style: { color: '#8A4540', fontSize: '12.5px', fontWeight: '600' } }, 'Update using the Bowel Movement card below.')
-        : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-            h('div', { style: { color: '#8A4540', fontSize: '11.5px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.03em' } }, 'Update status for ' + bannerDayLabel),
-            h('div', { style: { display: 'flex', gap: '8px' } },
-              h('select', { value: bBannerValue, onChange: (e) => { state.bowelBannerInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '42px', border: '1px solid rgba(161,91,86,0.3)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A' } },
-                h('option', { value: '' }, 'Update status if back to normal...'),
-                h('option', { value: 'normal' }, 'Normal'),
-                h('option', { value: 'very_little' }, 'Very little'),
-                h('option', { value: 'none' }, 'None'),
-                h('option', { value: 'diarrhea' }, 'Diarrhea')
-              ),
-              h('button', { onClick: submitBowelBannerUpdate, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#A15B56', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,60,55,0.35)' } }, 'Update')
-            )
-          )
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        h('div', { style: { color: '#8A4540', fontSize: '11.5px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.03em' } }, 'Update status for ' + bannerDayLabel),
+        h('div', { style: { display: 'flex', gap: '8px' } },
+          h('select', { value: bBannerValue, onChange: (e) => { state.bowelBannerInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '42px', border: '1px solid rgba(161,91,86,0.3)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A' } },
+            h('option', { value: '' }, 'Update status if back to normal...'),
+            h('option', { value: 'normal' }, 'Normal'),
+            h('option', { value: 'very_little' }, 'Very little'),
+            h('option', { value: 'none' }, 'None'),
+            h('option', { value: 'diarrhea' }, 'Diarrhea')
+          ),
+          h('button', { onClick: submitBowelBannerUpdate, style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: '#A15B56', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,60,55,0.35)' } }, 'Update')
+        )
+      )
     ));
+  }
+
+  // Bowel Movement retrospective check-in — persistent on Home until answered for YESTERDAY,
+  // escalating urgency through the day using the same rules as Daily Weight below. Disappears
+  // entirely once yesterday's entry exists; the answer then lives in Reports > Bowel Movement.
+  // To correct a wrong answer after it's been logged, remove it from that Reports history list —
+  // this alert reappears immediately since the day is unanswered again.
+  {
+    const bmYStart = yesterdayStart(now);
+    const bmYEntry = bowelMovementFor(bmYStart);
+    if (!bmYEntry) {
+      const level = dailyAlertLevel(now);
+      const s = dailyAlertStyle(level);
+      const bmYLabel = new Date(bmYStart).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+      const bmMsg = level === 2 ? ('Still not logged for ' + bmYLabel + ' — please answer before the day ends.') : level === 1 ? ('No bowel movement status logged for ' + bmYLabel + ' yet.') : (bmYLabel + '’s bowel movement hasn’t been logged yet.');
+      const bmSelectValue = state.bowelInput !== undefined ? state.bowelInput : '';
+      parts.push(h('div', { style: { background: s.bg, border: s.border, borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px', boxShadow: s.shadow } },
+        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center' } },
+          h('span', { style: { flexShrink: '0', width: '26px', height: '26px', borderRadius: '50%', background: s.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '13px' } }, 'B'),
+          h('div', { style: { flex: '1' } },
+            h('div', { style: { fontWeight: '800', color: s.color, fontSize: '14px', letterSpacing: '0.02em', marginBottom: '2px', textTransform: 'uppercase' } }, 'Bowel Movement'),
+            h('div', { style: { color: s.color, fontSize: '13.5px', fontWeight: '600', lineHeight: '1.4' } }, bmMsg)
+          )
+        ),
+        h('div', { style: { display: 'flex', gap: '8px' } },
+          h('select', { value: bmSelectValue, onChange: (e) => { state.bowelInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '42px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A' } },
+            h('option', { value: '' }, 'Select...'),
+            h('option', { value: 'normal' }, 'Normal'),
+            h('option', { value: 'very_little' }, 'Very little'),
+            h('option', { value: 'none' }, 'None'),
+            h('option', { value: 'diarrhea' }, 'Diarrhea')
+          ),
+          h('button', { onClick: () => submitBowelMovement(bmYStart), style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: s.color, color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.15)' } }, 'Log')
+        )
+      ));
+    }
+  }
+
+  // Appetite retrospective check-in — same persistent/escalating rules as Bowel Movement and
+  // Daily Weight, asking about YESTERDAY. Disappears once answered; the answer lands in
+  // Reports > Appetite (history-only there — no separate input card on that page).
+  {
+    const apYStart = yesterdayStart(now);
+    const apYEntry = appetiteFor(apYStart);
+    if (!apYEntry) {
+      const level = dailyAlertLevel(now);
+      const s = dailyAlertStyle(level);
+      const apYLabel = new Date(apYStart).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+      const apMsg = level === 2 ? ('Still not logged for ' + apYLabel + ' — please answer before the day ends.') : level === 1 ? ('No appetite status logged for ' + apYLabel + ' yet.') : (apYLabel + '’s appetite hasn’t been logged yet.');
+      const apSelectValue = state.appetiteInput !== undefined ? state.appetiteInput : '';
+      const apNoteValue = state.appetiteNoteInput !== undefined ? state.appetiteNoteInput : '';
+      parts.push(h('div', { style: { background: s.bg, border: s.border, borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px', boxShadow: s.shadow } },
+        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center' } },
+          h('span', { style: { flexShrink: '0', width: '26px', height: '26px', borderRadius: '50%', background: s.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '13px' } }, 'A'),
+          h('div', { style: { flex: '1' } },
+            h('div', { style: { fontWeight: '800', color: s.color, fontSize: '14px', letterSpacing: '0.02em', marginBottom: '2px', textTransform: 'uppercase' } }, 'Appetite'),
+            h('div', { style: { color: s.color, fontSize: '13.5px', fontWeight: '600', lineHeight: '1.4' } }, apMsg)
+          )
+        ),
+        h('div', { style: { display: 'flex', gap: '8px' } },
+          h('select', { value: apSelectValue, onChange: (e) => { state.appetiteInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '42px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A' } },
+            h('option', { value: '' }, 'Select...'),
+            h('option', { value: 'normal' }, 'Normal'),
+            h('option', { value: 'little' }, 'Little to none'),
+            h('option', { value: 'none' }, 'No Appetite')
+          ),
+          h('button', { onClick: () => submitAppetite(apYStart), style: { flexShrink: '0', minHeight: '42px', padding: '0 16px', borderRadius: '11px', background: s.color, color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.15)' } }, 'Log')
+        ),
+        h('textarea', { value: apNoteValue, onInput: (e) => { state.appetiteNoteInput = e.target.value; }, rows: 2, placeholder: 'Reason (optional)', style: { width: '100%', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '9px 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.7)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } })
+      ));
+    }
   }
 
   // Weight-not-logged-today alert — persistent, and visually escalates as the day goes on
   // without a reading: quiet reminder in the morning, firmer by afternoon, urgent by evening.
+  // (Shares its escalation rules with the Bowel Movement and Appetite alerts above via
+  // dailyAlertLevel()/dailyAlertStyle() — all three "must be answered" cards behave identically.)
   const weightLoggedToday = state.entries.some(e => e.medId === 'weight' && e.ts >= dayStart(now));
   if (!weightLoggedToday) {
-    const hourNow = new Date(now).getHours();
-    const level = hourNow >= 18 ? 2 : hourNow >= 12 ? 1 : 0; // 0 quiet, 1 firm, 2 urgent
-    const wColor = level === 2 ? '#C0453B' : level === 1 ? '#9A6419' : '#8E3D61';
-    const wBg = level === 2 ? 'rgba(192,69,59,0.14)' : level === 1 ? 'rgba(154,100,25,0.12)' : 'rgba(170,83,117,0.10)';
-    const wBorder = level === 2 ? '2px solid #C0453B' : level === 1 ? '2px solid #9A6419' : '1px solid rgba(170,83,117,0.3)';
+    const level = dailyAlertLevel(now);
+    const s = dailyAlertStyle(level);
     const wMsg = level === 2 ? 'Still no weight logged today — please log it before the day ends.' : level === 1 ? 'No weight logged yet today. A daily reading helps track trends.' : 'Weight hasn’t been logged yet today.';
-    parts.push(h('div', { style: { background: wBg, border: wBorder, borderRadius: '16px', padding: '14px 16px', display: 'flex', gap: '12px', alignItems: 'center', boxShadow: level ? ('0 4px 24px rgba(' + (level === 2 ? '192,69,59' : '154,100,25') + ',0.18)') : 'none' } },
-      h('span', { style: { flexShrink: '0', width: '26px', height: '26px', borderRadius: '50%', background: wColor, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '13px' } }, '⚖'),
+    parts.push(h('div', { style: { background: s.bg, border: s.border, borderRadius: '16px', padding: '14px 16px', display: 'flex', gap: '12px', alignItems: 'center', boxShadow: s.shadow } },
+      h('span', { style: { flexShrink: '0', width: '26px', height: '26px', borderRadius: '50%', background: s.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '13px' } }, '⚖'),
       h('div', { style: { flex: '1' } },
-        h('div', { style: { fontWeight: '800', color: wColor, fontSize: '14px', letterSpacing: '0.02em', marginBottom: '2px', textTransform: 'uppercase' } }, 'Daily Weight'),
-        h('div', { style: { color: wColor, fontSize: '13.5px', fontWeight: '600', lineHeight: '1.4' } }, wMsg)
+        h('div', { style: { fontWeight: '800', color: s.color, fontSize: '14px', letterSpacing: '0.02em', marginBottom: '2px', textTransform: 'uppercase' } }, 'Daily Weight'),
+        h('div', { style: { color: s.color, fontSize: '13.5px', fontWeight: '600', lineHeight: '1.4' } }, wMsg)
       )
     ));
   }
@@ -1477,39 +1557,6 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
       )
     )
   ));
-
-  // Bowel Movement — retrospective daily check-in (asks about yesterday, like a Weight card)
-  {
-    const yStart = yesterdayStart(now);
-    const yEntry = bowelMovementFor(yStart);
-    const yLabel = new Date(yStart).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
-    const issueActive = bowelIssueActive();
-    const issueDay = daysSinceBowelIssueStart();
-    const issueType = currentBowelIssueType();
-    const selectValue = state.bowelInput !== undefined ? state.bowelInput : (yEntry ? yEntry.value : '');
-    parts.push(h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '10px 11px', boxShadow: '0 3px 14px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' } },
-        h('div', null,
-          h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Bowel Movement'),
-          h('div', { style: { fontSize: '11px', color: '#7D6974', marginTop: '2px' } }, 'Yesterday, ' + yLabel + (yEntry ? (' — ' + (BOWEL_MOVEMENT_LABELS[yEntry.value] || yEntry.value) + ' logged') : ' — not yet logged'))
-        ),
-        issueActive ? h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(192,69,59,0.12)', color: '#A15B56', border: '1px solid rgba(192,69,59,0.25)', borderRadius: '99px', padding: '5px 11px', fontSize: '12px', fontWeight: '700', flexShrink: '0' } },
-          h('span', { style: { width: '7px', height: '7px', borderRadius: '50%', background: '#C0453B', display: 'inline-block' } }),
-          (issueType === 'diarrhea' ? 'Diarrhea' : 'Constipation') + ' · Day ' + issueDay
-        ) : null
-      ),
-      h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
-        h('select', { value: selectValue, onChange: (e) => { state.bowelInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 10px', fontSize: '13.5px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
-          h('option', { value: '' }, 'Select...'),
-          h('option', { value: 'normal' }, 'Normal'),
-          h('option', { value: 'very_little' }, 'Very little'),
-          h('option', { value: 'none' }, 'None'),
-          h('option', { value: 'diarrhea' }, 'Diarrhea')
-        ),
-        h('button', { onClick: () => submitBowelMovement(yStart), style: { flexShrink: '0', minHeight: '38px', padding: '0 15px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700' } }, yEntry ? 'Update' : 'Log')
-      )
-    ));
-  }
 
   // Chemo schedule card
   const chemoTs = nextChemoTs();
@@ -1970,13 +2017,18 @@ function reportDescriptor(type, now) {
     const day = daysSinceCycleStart();
     return { label: 'Cycle', icon: 'cycle', description: 'Track period status and cycle history.', meta: active ? ('Active · day ' + day) : 'No active cycle' };
   }
+  if (type === 'bowel_movement') {
+    const bEntries = bowelMovementHistorySorted();
+    const bLatest = bEntries[0];
+    return { label: 'Bowel Movement', icon: 'notes', description: 'Review bowel movement history logged from Home.', meta: bLatest ? ((BOWEL_MOVEMENT_LABELS[bLatest.value] || bLatest.value) + ' most recent') : 'No entries yet' };
+  }
   const yStart = yesterdayStart(now);
   const yEntry = appetiteFor(yStart);
-  return { label: 'Appetite', icon: 'notes', description: 'Track daily appetite level and notes.', meta: yEntry ? ((APPETITE_LABELS[yEntry.value] || yEntry.value) + ' yesterday') : 'Not yet logged for yesterday' };
+  return { label: 'Appetite', icon: 'notes', description: 'Review appetite history logged from Home.', meta: yEntry ? ((APPETITE_LABELS[yEntry.value] || yEntry.value) + ' yesterday') : 'Not yet logged for yesterday' };
 }
 
 function renderReportsMenu(now) {
-  const reportTypes = ['history', 'weight', 'cycle', 'appetite'];
+  const reportTypes = ['history', 'weight', 'cycle', 'bowel_movement', 'appetite'];
   return [
     h('section', null,
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', color: '#AA5375' } }, appIcon('chart', 19), h('span', { style: { fontSize: '12px', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Care reports')),
@@ -2002,7 +2054,7 @@ function renderReportsMenu(now) {
 
 function renderReportDetail(type, now) {
   const report = reportDescriptor(type, now);
-  const content = type === 'history' ? renderHistory(now) : type === 'weight' ? renderWeightTrend(now) : type === 'cycle' ? renderCycle(now) : renderAppetite(now);
+  const content = type === 'history' ? renderHistory(now) : type === 'weight' ? renderWeightTrend(now) : type === 'cycle' ? renderCycle(now) : type === 'bowel_movement' ? renderBowelMovementReport(now) : renderAppetite(now);
   return [
     h('section', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
       h('div', null,
@@ -2115,29 +2167,11 @@ function renderCycle(now) {
   return [card, history];
 }
 
+// Reports > Appetite is history-only (v54 redesign) — the actual input now lives on Home as a
+// persistent "must be answered" alert, matching Bowel Movement and Daily Weight. This view exists
+// purely for reviewing/removing past entries; removing one makes the Home alert reappear for that
+// day since it becomes unanswered again.
 function renderAppetite(now) {
-  const yStart = yesterdayStart(now);
-  const yEntry = appetiteFor(yStart);
-  const yLabel = new Date(yStart).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
-  const selectValue = state.appetiteInput !== undefined ? state.appetiteInput : (yEntry ? yEntry.value : '');
-  const noteValue = state.appetiteNoteInput !== undefined ? state.appetiteNoteInput : (yEntry ? (yEntry.note || '') : '');
-  const card = h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '16px 17px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
-    h('div', null,
-      h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Appetite'),
-      h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px' } }, 'Yesterday, ' + yLabel + (yEntry ? (' — ' + (APPETITE_LABELS[yEntry.value] || yEntry.value) + ' logged') : ' — not yet logged'))
-    ),
-    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-      h('select', { value: selectValue, onChange: (e) => { state.appetiteInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '48px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 12px', fontSize: '14.5px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
-        h('option', { value: '' }, 'Select...'),
-        h('option', { value: 'normal' }, 'Normal'),
-        h('option', { value: 'little' }, 'Little to none'),
-        h('option', { value: 'none' }, 'No Appetite')
-      )
-    ),
-    h('textarea', { value: noteValue, onInput: (e) => { state.appetiteNoteInput = e.target.value; }, rows: 2, placeholder: 'Reason (optional)', style: { width: '100%', marginTop: '8px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '10px 12px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } }),
-    h('button', { onClick: () => submitAppetite(yStart), style: { width: '100%', marginTop: '8px', minHeight: '48px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, yEntry ? 'Update' : 'Log')
-  );
-
   const entries = appetiteHistorySorted();
   const history = h('section', null,
     h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479', marginBottom: '10px' } }, 'Appetite History'),
@@ -2153,7 +2187,27 @@ function renderAppetite(now) {
     ) : h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, 'No appetite entries logged yet.')
   );
 
-  return [card, history];
+  return [history];
+}
+
+// Reports > Bowel Movement — history-only, same treatment as Appetite (v54). The input lives on
+// Home as a persistent "must be answered" alert; this view is for reviewing/removing past entries.
+function renderBowelMovementReport(now) {
+  const entries = bowelMovementHistorySorted();
+  const history = h('section', null,
+    h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479', marginBottom: '10px' } }, 'Bowel Movement History'),
+    entries.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+      ...entries.map(e => h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '13px 15px', display: 'flex', alignItems: 'flex-start', gap: '12px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+        h('span', { style: { flexShrink: '0', width: '10px', height: '10px', marginTop: '6px', borderRadius: '50%', background: BOWEL_ISSUE_VALUES.has(e.value) ? '#C0453B' : e.value === 'very_little' ? '#C77800' : '#0F9D6B', display: 'inline-block' } }),
+        h('div', { style: { flex: '1', minWidth: '0' } },
+          h('div', { style: { fontSize: '15px', fontWeight: '700', color: '#3D2B3A' } }, new Date(e.ts).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }) + ' — ' + (BOWEL_MOVEMENT_LABELS[e.value] || e.value))
+        ),
+        removeBtn(e)
+      ))
+    ) : h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, 'No bowel movement entries logged yet.')
+  );
+
+  return [history];
 }
 
 function renderInPatient(now) {
