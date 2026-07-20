@@ -35,6 +35,7 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v54 | Jul 20, 2026 | v53 | **Tylenol Liquid + Appetite tracking.** New medication, Tylenol Liquid (Acetaminophen, oral suspension): 30 mL (1000 mg) per dose, its own independent 6-hour gap (separate from pill Tylenol's 4-hour gap), and its own 90 mL/24h volume ceiling — logged as a distinct medication (`tylenol-liquid`) rather than folded into the existing Tylenol card, so a toast/dose picker never has to ask "pills or liquid?" and the two forms can't be confused in History. The two forms *share* the existing 2,500 mg/24h Tylenol daily ceiling via a new `ceilingGroup` mechanism — logging either form counts against the same combined total, and hitting the shared cap locks both. Volume and mg ceilings are tracked independently: it's possible to be locked on the 90 mL liquid cap while still under the 2,500 mg shared cap, or vice versa, and the lock reason (ceiling badge) reflects whichever was actually hit. Also added Appetite tracking: a new **Reports → Appetite** tab asks about the previous day's appetite (Normal / Little to none / No Appetite, via dropdown) with an optional notes field for the reason, following the same retrospective one-entry-per-day pattern as Bowel Movement (Update overwrites the existing day's entry rather than appending) and the same 48-hour edit-lock bypass, so a day's answer stays correctable. Appetite History lists past entries with a color-coded status dot. QA'd with a mocked Firestore harness, 29/29 new checks (dose shape, independent gap timers, shared-ceiling math across both forms, independent volume ceiling, Appetite submit/overwrite/empty-rejection/history/Reports rendering) plus a 25/25 regression pass across the existing missed-dose, bowel-movement, and bowel-dedup suites. | Testing |
 | v53 | Jul 20, 2026 | v52 | **Incident recovery: GitHub web-editor commit wiped `index.html`, `sw.js`, and `TESTING_HANDOFF.md`.** Overnight, a commit titled "v53: morphine half-dose window tracking, bump SW cache" was pushed directly to `main` through GitHub's inline web editor and replaced the entire contents of those three files with the literal text `undefined` (a paste-gone-wrong — GitHub's file editor has no diff preview before commit, so a bad clipboard paste silently becomes the whole file). No Morphine half-dose feature was actually built; the commit only destroyed files, and production was never touched. Live impact: the app served a blank/broken page, and a client-side cache reset (correctly tried first) could not fix it since the *server* was serving the broken file, not a stale client copy. Diagnosed via direct `fetch()` of the live files (200 OK, 9-byte `"undefined"` body) and the GitHub commit API (`+3 -2,944` lines across exactly those 3 files). Fixed by restoring all three files byte-for-byte from the last-known-good commit and bumping the SW cache to force every client to refresh. New standing rule: never paste replacement content into GitHub's inline web editor — always edit locally and push a real diff. | Testing |
 | v52 | Jul 19, 2026 | v51 | **Fix: redundant Bowel Issue banner Update control.** When a Bowel Issue is active, the pinned "Bowel Issue Active" banner and the retrospective "Bowel Movement" card can render at once, each showing what looks like an identical select+Update control, but they don't always target the same day. Fixed per Aaron's request for a design recommendation: when the banner's target day and the card's target day are the same, the banner now shows a pointer message instead of a duplicate control ("Update using the Bowel Movement card below."); when the days genuinely differ, the banner keeps its own control but now explicitly labels which day it updates (e.g. "Update status for today"). QA'd with a mocked Firestore harness, 8/8 new checks plus a 24/24 full regression pass alongside the v50/v51 suites. Verified live with a temporary test Firestore entry (created, screenshotted, deleted). | Testing |
 | v51 | Jul 19, 2026 | v50 | **Fix: Bowel Movement Update silently doing nothing on failure.** Aaron reported the Update button on the Bowel Movement card "doesn't look like it does anything." Root cause: `submitBowelMovement()` and `submitBowelBannerUpdate()` had no error handling around their delete-old-entry + add-new-entry Firestore calls — if either call failed for any reason, the async function threw and aborted silently, with no toast and no visible change. Fixed by wrapping both in try/catch (mirroring the existing `clearMissedDoses()` pattern): on failure they now show "Could not save — check connection and try again" and leave the user's pending selection in place instead of silently resetting it. Also documented for future debugging: when a Bowel Issue is active, two separate Update controls can be on screen at once — the pinned "Bowel Issue Active" banner (updates whichever day is driving the active streak) and the retrospective "Bowel Movement" card under Weight (always updates yesterday specifically) — easy to conflate since both look like a dropdown + Update button. QA'd with a mocked Firestore harness, 7/7 checks covering the success path and both functions' failure paths. | Testing |
@@ -117,7 +118,7 @@ gap-based push reminder system that exists in production does not run here at al
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v53` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v54` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
@@ -126,7 +127,8 @@ gap-based push reminder system that exists in production does not run here at al
 | Medication | Generic | Tracking Type |
 |---|---|---|
 | Dexamethasone | Steroid, chemo premed | 2 tablets, 8 AM & 2 PM, only appears day before chemo through day after (chemoOnly) |
-| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses. **1–10 pain-level required at log time (v29; enforced as required in v30)** |
+| Tylenol | Acetaminophen | Daily limit (2500 mg, resets midnight), 4h min gap, 500/1000 mg doses. **1–10 pain-level required at log time (v29; enforced as required in v30)**. Shares its 2500 mg daily ceiling with Tylenol Liquid (v54) |
+| Tylenol Liquid | Acetaminophen, oral suspension | 30 mL (1000 mg) per dose, 6h min gap (independent of pill Tylenol's 4h gap), max 90 mL/24h (own volume ceiling, independent of the shared 2500 mg mg-ceiling). 1–10 pain-level required at log time. Added v54 |
 | Zofran | Ondansetron | **As-needed — no gap timer, no reminders** (changed in v29). Blocked on chemo days 1–2 with override, per care team |
 | Compazine | Prochlorperazine | 6h min gap; 10 PM routine + earlier as needed (in Evening meds card) |
 | Morphine | Immediate release | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg) doses. **1–10 pain-level required at log time (v29; enforced as required in v30)** |
@@ -162,6 +164,16 @@ active streak, while the retrospective card always updates yesterday specificall
 banner. **Both Update paths now report save failures instead of failing silently (v51)** — see the
 v51 row in the Version History table above.
 
+## Appetite Tracking
+
+Available at **Reports → Appetite** (v54). A retrospective daily card asks about the previous day's
+appetite via dropdown (Normal / Little to none / No Appetite), with an optional notes field to record
+the reason. Follows the same one-entry-per-day pattern as Bowel Movement: submitting again for the
+same day overwrites the existing entry rather than adding a second one. Appetite History lists past
+entries sorted most-recent-first with a color-coded status dot (green/amber/red) and the optional
+note. Entries bypass the normal 48-hour edit lock, same as Weight, Cycle, and Bowel Movement, so a
+day's answer stays correctable.
+
 ## Chemo Cycle
 
 Set a chemo date on the Home view's "Chemo schedule" card. The app derives offsets from that date:
@@ -183,7 +195,7 @@ screens.
 
 - **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner (with persistent Clear button, v50), Bowel Issue Active banner (pinned, only when an issue streak is active, v49), chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
 - **Meds** — medication-management page for the active configuration. It lists each medication's display/generic names, dose options, gap/frequency rules, daily limit, and schedule type; supports Add, Edit, and confirmation-protected Delete. The configuration persists in browser-local storage only; dose and vitals history remains in the existing Firestore test collection.
-- **Reports** — a menu of three cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), and **Cycle** (Menstrual Cycle Start/End card plus Cycle History). Each detail view has a themed right-aligned back control to return to Reports.
+- **Reports** — a menu of four cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), **Cycle** (Menstrual Cycle Start/End card plus Cycle History), and **Appetite** (v54 — previous-day dropdown plus optional notes, with Appetite History below it). Each detail view has a themed right-aligned back control to return to Reports.
 - **In-Patient** — Start/End/Undo card plus a history list of hospital stays with real start/end timestamps.
 - **Symptoms** — ad hoc, timestamped incident logging (Nausea, Vomiting, Diarrhea, Constipation), fully editable/deletable, no 48h lock.
 

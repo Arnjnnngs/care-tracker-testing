@@ -119,8 +119,10 @@ const DEFAULT_MEDS = [
   { id:'dexamethasone', name:'Dexamethasone', sub:'Steroid · chemo premed', type:'win', alerts:true, chemoOnly:true, note:'2 tablets · 8 AM & 2 PM · day before chemo through day after',
     doses:[{label:'2 tablets',pills:2,mg:0}],
     windows:[{start:8,end:12,name:'Morning'},{start:14,end:18,name:'Afternoon'}] },
-  { id:'tylenol', name:'Tylenol', sub:'Acetaminophen', type:'gap', gapH:4, ceiling:true, painScale:true, note:'Min 4-hour gap',
+  { id:'tylenol', name:'Tylenol', sub:'Acetaminophen', type:'gap', gapH:4, ceiling:true, ceilingGroup:'tylenol', painScale:true, note:'Min 4-hour gap',
     doses:[{label:'500 mg',mg:500},{label:'1000 mg',mg:1000}] },
+  { id:'tylenol-liquid', name:'Tylenol Liquid', sub:'Acetaminophen · Oral suspension', type:'gap', gapH:6, ceiling:true, ceilingGroup:'tylenol', volumeCeilingMl:90, volumePerDoseMl:30, painScale:true, note:'Min 6-hour gap · shares daily limit with Tylenol · max 90 mL/24h',
+    doses:[{label:'30 mL (1000 mg)',mg:1000}] },
   { id:'zofran', name:'Zofran', sub:'Ondansetron', type:'gap', gapH:0, note:'As needed — no gap timer' },
   { id:'compazine', name:'Compazine', sub:'Prochlorperazine', type:'gap', gapH:6, note:'10 PM · earlier as needed · min 6h gap' },
   { id:'morphine', name:'Morphine', sub:'Immediate release', type:'gap', gapH:4, note:'4-hour gap', painScale:true,
@@ -144,7 +146,7 @@ const DEFAULT_MEDS = [
 // Medication configuration is intentionally browser-local for the testing app.
 // Dose-entry history remains in Firestore; configuration changes do not create a new collection.
 const MED_CONFIG_STORAGE_KEY = 'caretracker-testing-medication-config-v1';
-const DEFAULT_QUICK_LOG_IDS = ['dexamethasone', 'tylenol', 'zofran', 'morphine', 'lidocaine', 'protonix', 'senokot', 'imodium'];
+const DEFAULT_QUICK_LOG_IDS = ['dexamethasone', 'tylenol', 'tylenol-liquid', 'zofran', 'morphine', 'lidocaine', 'protonix', 'senokot', 'imodium'];
 const DEFAULT_EVENING_IDS = ['buspirone', 'paroxetine', 'iron', 'compazine'];
 
 function deepCopyMeds(meds) {
@@ -293,7 +295,10 @@ function latest(id) { const es = entriesFor(id); return es.length ? es.reduce((a
 function tempSuffix() { return CONFIG.tempUnit === 'Celsius' ? '°C' : '°F'; }
 function tempFever() { return CONFIG.tempUnit === 'Celsius' ? 38.0 : 100.4; }
 function tempHigh() { return CONFIG.tempUnit === 'Celsius' ? 39.4 : 103; }
-function tylenolMg() { return dailyDoseMg('tylenol'); }
+function tylenolMg() {
+  const med = state.meds.find(m => m.id === 'tylenol');
+  return med && med.ceilingGroup ? dailyGroupMg(med) : dailyDoseMg('tylenol');
+}
 function dailyPills(medId) { const c = dayStart(state.now); return entriesFor(medId).filter(e => e.ts >= c).reduce((s, e) => s + (e.pills || 0), 0); }
 function isEarlyAt(med, ts) {
   if (med.type === 'gap') {
@@ -306,18 +311,35 @@ function isEarlyAt(med, ts) {
 }
 function usedRecently(id) { return entriesFor(id).some(e => e.ts >= state.now - 7 * 86400000); }
 function dailyDoseMg(medId) { const c = dayStart(state.now); return entriesFor(medId).filter(e => e.ts >= c).reduce((sum, entry) => sum + (entry.mg || 0), 0); }
+// Meds sharing a ceilingGroup (e.g. Tylenol pills + Tylenol Liquid) count against ONE combined
+// daily mg ceiling, since it's the same acetaminophen safety limit regardless of dosage form.
+function ceilingGroupMedIds(med) {
+  if (!med) return [];
+  if (!med.ceilingGroup) return [med.id];
+  return state.meds.filter(m => m.ceilingGroup === med.ceilingGroup).map(m => m.id);
+}
+function dailyGroupMg(med) { return ceilingGroupMedIds(med).reduce((sum, id) => sum + dailyDoseMg(id), 0); }
+// A separate, form-specific volume cap (e.g. Tylenol Liquid's 90 mL/24h) — independent of and in
+// addition to the shared mg ceiling above, since it's the liquid form's own labeled dosing limit.
+function dailyVolumeMl(medId) { const c = dayStart(state.now); return entriesFor(medId).filter(e => e.ts >= c).reduce((sum, entry) => sum + (entry.volumeMl || 0), 0); }
+function dailyVolumeCeiling(med) {
+  if (!med || !med.volumeCeilingMl) return null;
+  return { used: dailyVolumeMl(med.id), max: med.volumeCeilingMl, unit: 'mL', label: med.volumeCeilingMl + ' mL' };
+}
 function medicationCeilingMax(med) {
   if (!med || !med.ceiling) return null;
   const configured = Number(med.ceilingMax);
   if (configured > 0) return configured;
-  return med.id === 'tylenol' ? CONFIG.ceilingMg : null;
+  if (med.id === 'tylenol' || med.ceilingGroup === 'tylenol') return CONFIG.ceilingMg;
+  return null;
 }
 function dailyCeiling(med) {
   if (!med || !med.ceiling) return null;
   const max = medicationCeilingMax(med);
   if (!max) return null;
   if (med.ceilingUnit) return { used: dailyPills(med.id), max, unit: med.ceilingUnit, label: max + ' ' + med.ceilingUnit };
-  return { used: dailyDoseMg(med.id), max, unit: 'mg', label: max.toLocaleString() + ' mg' };
+  const used = med.ceilingGroup ? dailyGroupMg(med) : dailyDoseMg(med.id);
+  return { used, max, unit: 'mg', label: max.toLocaleString() + ' mg' };
 }
 // Missed-dose detection. A window counts as covered by any dose logged that day
 // before the window closed (and after the previous window closed) — so early logs
@@ -380,7 +402,7 @@ function fmtCountdown(ms) {
   if (m >= 1) { if (m < 5) { const s = Math.floor((ms % 60000) / 1000); return m + 'm ' + s + 's'; } return m + 'm'; }
   return Math.max(1, Math.floor(ms / 1000)) + 's';
 }
-function nameOf(id) { if (id === 'temp') return 'Temperature'; if (id === 'weight') return 'Weight'; if (id === 'cycle_start') return 'Period Start'; if (id === 'cycle_end') return 'Period End'; if (id === 'inpatient') return 'In-Patient Day'; if (id === 'inpatient_start') return 'In-Patient Start'; if (id === 'inpatient_end') return 'In-Patient End'; if (id === 'bowel_movement') return 'Bowel Movement'; if (id && id.indexOf('symptom_') === 0) return SYMPTOM_TYPES[id.slice(8)] || id.slice(8); const m = state.meds.find(x => x.id === id); const archived = state.archivedMeds && state.archivedMeds[id]; return m ? m.name : (archived ? archived.name : id); }
+function nameOf(id) { if (id === 'temp') return 'Temperature'; if (id === 'weight') return 'Weight'; if (id === 'cycle_start') return 'Period Start'; if (id === 'cycle_end') return 'Period End'; if (id === 'inpatient') return 'In-Patient Day'; if (id === 'inpatient_start') return 'In-Patient Start'; if (id === 'inpatient_end') return 'In-Patient End'; if (id === 'bowel_movement') return 'Bowel Movement'; if (id === 'appetite') return 'Appetite'; if (id && id.indexOf('symptom_') === 0) return SYMPTOM_TYPES[id.slice(8)] || id.slice(8); const m = state.meds.find(x => x.id === id); const archived = state.archivedMeds && state.archivedMeds[id]; return m ? m.name : (archived ? archived.name : id); }
 function nowLocalISO() { return toLocalISO(simNow()); }
 function toLocalISO(ts) {
   const d = new Date(ts);
@@ -433,6 +455,13 @@ function status(med) {
         return { locked: true, ceilingHit: true, ceilingLabel: dc.label };
       }
     }
+    // Form-specific volume cap (e.g. Tylenol Liquid's 90 mL/24h) — independent of the mg ceiling
+    if (med.volumeCeilingMl) {
+      const vc = dailyVolumeCeiling(med);
+      if (vc && vc.used >= vc.max) {
+        return { locked: true, ceilingHit: true, ceilingLabel: vc.label };
+      }
+    }
     const last = es[es.length - 1];
     if (!last) return { locked: false };
     const at = last.ts + med.gapH * 3600000;
@@ -469,13 +498,25 @@ function afterLog(entry) {
     const near = state.entries.find(e => e.medId === other && e.id !== entry.id && Math.abs(e.ts - entry.ts) <= twoH);
     if (near) { setState({ warn: { tone: 'amber', title: 'Iron + Protonix timing', body: 'Iron and Protonix were logged within 2 hours of each other. Protonix (a PPI) lowers stomach acid, which can markedly reduce iron absorption. Aim to separate the two by at least 2 hours.' } }); return; }
   }
-  if (entry.medId === 'tylenol') {
+  if (entry.medId === 'tylenol' || entry.medId === 'tylenol-liquid') {
     const mg = tylenolMg();
     const tylenol = state.meds.find(med => med.id === 'tylenol');
     const limit = medicationCeilingMax(tylenol) || CONFIG.ceilingMg;
-    if (mg > limit) { setState({ warn: { tone: 'red', title: 'Acetaminophen ceiling exceeded', body: "Today's Tylenol total is " + mg.toLocaleString() + " mg, above the " + limit.toLocaleString() + " mg daily limit. Do not give more without contacting the care team." } }); }
-  }
-  if (entry.medId !== 'tylenol') {
+    const mgOver = mg > limit;
+    let volOver = false, vol = 0, liquidMed = null;
+    if (entry.medId === 'tylenol-liquid') {
+      liquidMed = state.meds.find(med => med.id === 'tylenol-liquid');
+      vol = dailyVolumeMl('tylenol-liquid');
+      volOver = !!(liquidMed && liquidMed.volumeCeilingMl && vol > liquidMed.volumeCeilingMl);
+    }
+    if (mgOver && volOver) {
+      setState({ warn: { tone: 'red', title: 'Acetaminophen ceiling exceeded', body: "Today's Tylenol total is " + mg.toLocaleString() + " mg (above the " + limit.toLocaleString() + " mg daily limit) and Tylenol Liquid volume is " + vol + " mL (above the " + liquidMed.volumeCeilingMl + " mL daily limit). Do not give more without contacting the care team." } });
+    } else if (mgOver) {
+      setState({ warn: { tone: 'red', title: 'Acetaminophen ceiling exceeded', body: "Today's Tylenol total is " + mg.toLocaleString() + " mg, above the " + limit.toLocaleString() + " mg daily limit. Do not give more without contacting the care team." } });
+    } else if (volOver) {
+      setState({ warn: { tone: 'red', title: 'Tylenol Liquid volume ceiling exceeded', body: "Today's Tylenol Liquid total is " + vol + " mL, above the " + liquidMed.volumeCeilingMl + " mL daily limit. Do not give more without contacting the care team." } });
+    }
+  } else {
     const configuredMedication = state.meds.find(med => med.id === entry.medId);
     const configuredLimit = dailyCeiling(configuredMedication);
     if (configuredLimit && configuredLimit.used > configuredLimit.max) {
@@ -543,6 +584,7 @@ async function confirmTimeAndLog() {
     if (med.painScale && !m.painLevel) { setToast('Select a pain level before logging ' + med.name); return; }
     const entry = { medId: m.medId, dose: m.dose ? m.dose.label : null, mg: m.dose ? (m.dose.mg || 0) : 0, ts };
     if (m.dose && m.dose.pills) entry.pills = m.dose.pills;
+    if (med.volumePerDoseMl) entry.volumeMl = med.volumePerDoseMl;
     if (med.painScale && m.painLevel) entry.painLevel = m.painLevel;
     const early = !!(m.opts && m.opts.force) && isEarlyAt(med, ts);
     if (early) entry.override = true;
@@ -753,6 +795,43 @@ async function submitBowelBannerUpdate() {
     await logBowelMovement(v, day);
     setState({ bowelBannerInput: undefined });
     setToast('Bowel movement updated — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+  } catch (e) {
+    setToast('Could not save — check connection and try again');
+  }
+}
+
+// ---- Appetite tracking ----
+// One retrospective daily entry (like Bowel Movement), value one of: normal / little / none,
+// tagged to the day being reported on, with an optional free-text note for the reason. Lives in
+// its own Reports tab rather than a Home card. At most one appetite entry per day — Update
+// overwrites (rather than appends to) that day's answer, same pattern as Bowel Movement.
+const APPETITE_LABELS = { normal: 'Normal', little: 'Little to none', none: 'No Appetite' };
+function appetiteEntriesByDay() {
+  const map = new Map();
+  state.entries.filter(e => e.medId === 'appetite').forEach(e => {
+    const d0 = dayStart(e.ts);
+    const existing = map.get(d0);
+    if (!existing || e.ts >= existing.ts) map.set(d0, e);
+  });
+  return map;
+}
+function appetiteFor(dayStartTs) { return appetiteEntriesByDay().get(dayStartTs) || null; }
+function appetiteHistorySorted() { return [...appetiteEntriesByDay().values()].sort((a, b) => b.ts - a.ts); }
+async function logAppetite(value, dayStartTs, note) {
+  const entry = { medId: 'appetite', value, dose: APPETITE_LABELS[value] || value, mg: 0, ts: dayStartTs + 12 * 3600000 };
+  const trimmedNote = String(note || '').trim();
+  if (trimmedNote) entry.note = trimmedNote;
+  await addEntryDB(entry);
+}
+async function submitAppetite(dayStartTs) {
+  const v = state.appetiteInput;
+  if (!v) { setToast('Select an appetite level first'); return; }
+  try {
+    const existing = appetiteFor(dayStartTs);
+    if (existing) await removeEntryDB(existing.id);
+    await logAppetite(v, dayStartTs, state.appetiteNoteInput);
+    setState({ appetiteInput: undefined, appetiteNoteInput: undefined });
+    setToast('Appetite logged — ' + (APPETITE_LABELS[v] || v));
   } catch (e) {
     setToast('Could not save — check connection and try again');
   }
@@ -1110,7 +1189,7 @@ function missedRow(e, i) {
 // dosing safety chain the 48h lock protects, so they stay editable/removable indefinitely
 // (data-entry corrections only). Symptoms use a medId prefix (symptom_nausea, etc.) rather than
 // a fixed id, so those are matched separately below instead of being listed in this set.
-const BYPASS_48H_IDS = new Set(['weight', 'cycle_start', 'cycle_end', 'bowel_movement']);
+const BYPASS_48H_IDS = new Set(['weight', 'cycle_start', 'cycle_end', 'bowel_movement', 'appetite']);
 function bypasses48h(medId) { return BYPASS_48H_IDS.has(medId) || (medId && medId.indexOf('symptom_') === 0); }
 function removeBtn(e) {
   if (!bypasses48h(e.medId) && state.now - e.ts > 48 * 3600000) return null; // entries older than 48h are permanent history
@@ -1886,13 +1965,18 @@ function renderMedicationManager(now) {
 function reportDescriptor(type, now) {
   if (type === 'history') return { label: 'History', icon: 'history', description: 'Review dose, symptom, and vital logs by day.', meta: state.entries.length + ' recorded entries' };
   if (type === 'weight') { const latestWeight = latest('weight'); return { label: 'Weight', icon: 'chart', description: 'Explore weight readings, trends, and recent changes.', meta: latestWeight ? (latestWeight.weight + ' lbs latest') : 'No readings yet' }; }
-  const active = cycleActive();
-  const day = daysSinceCycleStart();
-  return { label: 'Cycle', icon: 'cycle', description: 'Track period status and cycle history.', meta: active ? ('Active · day ' + day) : 'No active cycle' };
+  if (type === 'cycle') {
+    const active = cycleActive();
+    const day = daysSinceCycleStart();
+    return { label: 'Cycle', icon: 'cycle', description: 'Track period status and cycle history.', meta: active ? ('Active · day ' + day) : 'No active cycle' };
+  }
+  const yStart = yesterdayStart(now);
+  const yEntry = appetiteFor(yStart);
+  return { label: 'Appetite', icon: 'notes', description: 'Track daily appetite level and notes.', meta: yEntry ? ((APPETITE_LABELS[yEntry.value] || yEntry.value) + ' yesterday') : 'Not yet logged for yesterday' };
 }
 
 function renderReportsMenu(now) {
-  const reportTypes = ['history', 'weight', 'cycle'];
+  const reportTypes = ['history', 'weight', 'cycle', 'appetite'];
   return [
     h('section', null,
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', color: '#AA5375' } }, appIcon('chart', 19), h('span', { style: { fontSize: '12px', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Care reports')),
@@ -1918,7 +2002,7 @@ function renderReportsMenu(now) {
 
 function renderReportDetail(type, now) {
   const report = reportDescriptor(type, now);
-  const content = type === 'history' ? renderHistory(now) : type === 'weight' ? renderWeightTrend(now) : renderCycle(now);
+  const content = type === 'history' ? renderHistory(now) : type === 'weight' ? renderWeightTrend(now) : type === 'cycle' ? renderCycle(now) : renderAppetite(now);
   return [
     h('section', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
       h('div', null,
@@ -2026,6 +2110,47 @@ function renderCycle(now) {
         h('div', { style: { fontSize: '15px', fontWeight: '700', color: '#3D2B3A' } }, fmtCyclePeriod(p))
       ))
     ) : h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, 'No periods logged yet.')
+  );
+
+  return [card, history];
+}
+
+function renderAppetite(now) {
+  const yStart = yesterdayStart(now);
+  const yEntry = appetiteFor(yStart);
+  const yLabel = new Date(yStart).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+  const selectValue = state.appetiteInput !== undefined ? state.appetiteInput : (yEntry ? yEntry.value : '');
+  const noteValue = state.appetiteNoteInput !== undefined ? state.appetiteNoteInput : (yEntry ? (yEntry.note || '') : '');
+  const card = h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '16px 17px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+    h('div', null,
+      h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Appetite'),
+      h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px' } }, 'Yesterday, ' + yLabel + (yEntry ? (' — ' + (APPETITE_LABELS[yEntry.value] || yEntry.value) + ' logged') : ' — not yet logged'))
+    ),
+    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+      h('select', { value: selectValue, onChange: (e) => { state.appetiteInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '48px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 12px', fontSize: '14.5px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+        h('option', { value: '' }, 'Select...'),
+        h('option', { value: 'normal' }, 'Normal'),
+        h('option', { value: 'little' }, 'Little to none'),
+        h('option', { value: 'none' }, 'No Appetite')
+      )
+    ),
+    h('textarea', { value: noteValue, onInput: (e) => { state.appetiteNoteInput = e.target.value; }, rows: 2, placeholder: 'Reason (optional)', style: { width: '100%', marginTop: '8px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '10px 12px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } }),
+    h('button', { onClick: () => submitAppetite(yStart), style: { width: '100%', marginTop: '8px', minHeight: '48px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, yEntry ? 'Update' : 'Log')
+  );
+
+  const entries = appetiteHistorySorted();
+  const history = h('section', null,
+    h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479', marginBottom: '10px' } }, 'Appetite History'),
+    entries.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+      ...entries.map(e => h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '13px 15px', display: 'flex', alignItems: 'flex-start', gap: '12px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+        h('span', { style: { flexShrink: '0', width: '10px', height: '10px', marginTop: '6px', borderRadius: '50%', background: e.value === 'normal' ? '#0F9D6B' : e.value === 'little' ? '#C77800' : '#C0453B', display: 'inline-block' } }),
+        h('div', { style: { flex: '1', minWidth: '0' } },
+          h('div', { style: { fontSize: '15px', fontWeight: '700', color: '#3D2B3A' } }, new Date(e.ts).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }) + ' — ' + (APPETITE_LABELS[e.value] || e.value)),
+          e.note ? h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px', lineHeight: '1.4' } }, e.note) : null
+        ),
+        removeBtn(e)
+      ))
+    ) : h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, 'No appetite entries logged yet.')
   );
 
   return [card, history];

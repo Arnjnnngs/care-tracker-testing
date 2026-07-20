@@ -5,7 +5,8 @@
 > orange "🧪 Testing app" banner in the header. sw.js cache is `caretracker-testing-vN`. Features
 > under test here that are NOT (yet) in production: chemo cycle system, missed-dose alerts,
 > menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale, Zofran as-needed,
-> Bowel Movement/Symptoms tracking, persistent Firestore-backed missed-dose Clear.
+> Bowel Movement/Symptoms tracking, persistent Firestore-backed missed-dose Clear, Tylenol Liquid
+> (shared-ceiling + own volume cap), Appetite tracking.
 > Promote to prod by porting the relevant changes into `care-tracker`'s `index.html` with
 > `TEST_MODE = false` and a prod cache bump — **only when Aaron explicitly says to.**
 
@@ -13,13 +14,13 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 20, 2026
-> **Current version:** v53 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v54 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in TESTING_README.md at the time. See TESTING_README's table for a placeholder note
 > and Section 9 below — flagged to Aaron on Jul 19, 2026 for a decision on backfilling from commit
-> history as a separate pass. v50–v53 are fully documented.
+> history as a separate pass. v50–v54 are fully documented.
 >
 > **Never edit `index.html` or `sw.js` directly through GitHub's web editor.** On the night of Jul
 > 19–20, 2026, a direct web-editor commit (titled "v53: morphine half-dose window tracking, bump SW
@@ -99,19 +100,24 @@ theme, not this one.
 ### `caretracker_test_entries` (this app's collection — `COL_NAME` when `TEST_MODE` is true)
 Each document is one logged event. Fields actually written by this app's code:
 
-- `medId` — `"dexamethasone" | "tylenol" | "zofran" | "compazine" | "morphine" | "lidocaine" | "imodium" | "protonix" | "buspirone" | "paroxetine" | "iron" | "senokot" | "temp" | "weight" | "chemo_date" | "cycle_start" | "cycle_end" | "inpatient_start" | "inpatient_end" | "inpatient"` (`inpatient` is the pre-v32 single-day marker, kept only for backward-compat reads of old data — new writes always use `inpatient_start`/`inpatient_end`)
+- `medId` — `"dexamethasone" | "tylenol" | "tylenol-liquid" | "zofran" | "compazine" | "morphine" | "lidocaine" | "imodium" | "protonix" | "buspirone" | "paroxetine" | "iron" | "senokot" | "appetite" | "temp" | "weight" | "chemo_date" | "cycle_start" | "cycle_end" | "inpatient_start" | "inpatient_end" | "inpatient"` (`inpatient` is the pre-v32 single-day marker, kept only for backward-compat reads of old data — new writes always use `inpatient_start`/`inpatient_end`)
 - `ts` — ms-since-epoch of the event
-- `dose` — human-readable label (e.g. `"1000 mg"`, `"½ tab · 7.5 mg"`) or `null`
+- `dose` — human-readable label (e.g. `"1000 mg"`, `"½ tab · 7.5 mg"`, `"30 mL (1000 mg)"`, `"Little to none"`) or `null`
 - `mg` — numeric mg (0 for non-mg entries)
 - `pills` — pill/application count, only present when relevant
+- `volumeMl` — numeric mL, present only on Tylenol Liquid doses (new in v54)
+- `value` — raw Appetite selection (`"normal" | "little" | "none"`), present only on `appetite` entries (new in v54); `dose` carries the human-readable label for the same field
+- `note` — optional free-text reason, present only on `appetite` entries when the user typed one (new in v54)
 - `temp` / `weight` — numeric value on vitals entries
 - `override` — boolean, present when logged early past a lock
-- `painLevel` — integer 1–10, present on Morphine and Tylenol doses (new in v29). **As of v30 this is required** — `confirmTimeAndLog()` rejects the log with a toast (`Select a pain level before logging <med>`) if `m.painLevel` is unset for a `painScale` med, so any entry for these two meds is guaranteed to carry a level.
+- `painLevel` — integer 1–10, present on Morphine and Tylenol doses (new in v29), and Tylenol Liquid doses (v54). **As of v30 this is required for Morphine/Tylenol** — `confirmTimeAndLog()` rejects the log with a toast (`Select a pain level before logging <med>`) if `m.painLevel` is unset for a `painScale` med, so any entry for these meds is guaranteed to carry a level.
 - `loggedAt` — present on `chemo_date` records; used to find the most recently *set* chemo date (the
   record's own `ts` is the chemo date itself, which can be in the future)
 
 `cycle_start` / `cycle_end` and `inpatient_start` / `inpatient_end` records carry no special fields beyond the common ones —
-they're pure event markers, always logged at `Date.now()` (no time picker).
+they're pure event markers, always logged at `Date.now()` (no time picker). `appetite` records are one-per-day
+(keyed by day-start), logged at noon on the target day (`dayStart + 12h`) so they sort predictably in History
+regardless of what time of day the caregiver actually filled the dropdown in.
 
 ### `caretracker_entries`
 Production's real collection. **This app must never write here.**
@@ -132,7 +138,8 @@ Production's preferences collection. **This app must never write here.**
 | ID | Display Name | Rules |
 |---|---|---|
 | `dexamethasone` | Dexamethasone | `chemoOnly: true` — only appears in Quick Log when `dexActiveOn(day)` (day −1 to +1 relative to chemo date). 2 tablets, 8 AM & 2 PM windows. Missed-dose tracked. |
-| `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29), required as of v30** — same 1–10 "Pain level" dropdown as Morphine; Confirm is blocked until a level is chosen |
+| `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29), required as of v30** — same 1–10 "Pain level" dropdown as Morphine; Confirm is blocked until a level is chosen. **`ceilingGroup: 'tylenol'` (v54)** — shares its 2500 mg daily ceiling with `tylenol-liquid` (see below) |
+| `tylenol-liquid` | Tylenol Liquid | Added v54. Oral suspension form, tracked as a fully separate medication (not folded into the `tylenol` card) so History/Reports never have to disambiguate "which Tylenol." 30 mL (1000 mg) per dose, its own independent 6h gap (does not interact with pill Tylenol's 4h gap), `painScale: true` + required (same as pill Tylenol). `ceilingGroup: 'tylenol'` — its mg total is pooled with pill Tylenol against the same 2500 mg/24h ceiling. `volumeCeilingMl: 90` + `volumePerDoseMl: 30` — a second, independent ceiling on its own 90 mL/24h, tracked only from this medication's own entries (pill Tylenol doses never count toward the volume total, and Liquid doses never count toward anything but the shared mg ceiling and its own volume ceiling) |
 | `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–1 via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
 | `compazine` | Compazine | 6h min gap, shown in Evening meds card |
 | `morphine` | Morphine | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg). **`painScale: true` (v29), required as of v30** — time modal shows a 1–10 "Pain level" dropdown; `Not recorded` (blank) is no longer a valid choice for Confirm, `confirmTimeAndLog()` rejects the submission otherwise. Stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field/requirement (see above) |
@@ -152,6 +159,66 @@ Production's preferences collection. **This app must never write here.**
   historical entry rendering remains intelligible. Delete is always confirmation-protected.
 - Configuration can differ by device/browser profile. Do not describe this as real-time shared
   medication configuration; only medication entries continue to sync through Firestore.
+
+### Tylenol Liquid + shared-ceiling mechanism (v54)
+- `ceilingGroupMedIds(med)` — returns every medication in `state.meds` sharing `med.ceilingGroup`
+  (currently just `['tylenol', 'tylenol-liquid']`), or `[med.id]` if the med has no group.
+- `dailyGroupMg(med)` — sums `dailyDoseMg(id)` across every id in that group, giving a combined
+  24-hour mg total across both pill and liquid forms.
+- `dailyCeiling(med)` — its mg-branch now uses `dailyGroupMg(med)` when `med.ceilingGroup` is set,
+  `dailyDoseMg(med.id)` otherwise, so the existing ceiling-badge UI (shared by every medication, not
+  Tylenol-specific) automatically reflects the combined total for both forms without any bespoke UI.
+- `dailyVolumeMl(medId)` / `dailyVolumeCeiling(med)` — a wholly separate mechanism from the mg
+  ceiling above, scoped to a single `medId` (no grouping): sums `entry.volumeMl` across that
+  medication's own entries since midnight and compares against `med.volumeCeilingMl`. Pill Tylenol
+  has no `volumeCeilingMl` and never accumulates a volume total; Tylenol Liquid's volume total is
+  never affected by pill Tylenol entries.
+- `status(med)` checks **both** ceilings independently for a `volumeCeilingMl` medication: the
+  existing mg-ceiling check (now group-aware) runs first, then a second check locks the medication
+  if `dailyVolumeMl(med.id) >= med.volumeCeilingMl`. Either one alone is sufficient to lock — it's
+  possible to be locked on the 90 mL cap while still under 2500 mg combined, or vice versa (e.g. a
+  large pill-Tylenol dose could hit the shared mg ceiling well before 90 mL of liquid is ever given).
+- `afterLog()`'s post-log ceiling-warning toast was restructured to check both `tylenol` and
+  `tylenol-liquid` medIds together: it computes the combined mg total and (for a Liquid dose) the
+  volume total, and shows a combined/mg-only/volume-only warning depending on which limit(s) the
+  dose that was just logged actually crossed.
+- **Naming gotcha:** the medication id is `tylenol-liquid` (hyphen), not `tylenol_liquid`
+  (underscore) — `safeMedicationId()` (used by `normalizeMedication()` on every medication, including
+  `DEFAULT_MEDS` entries) silently converts any non-`[a-z0-9]` character, including underscores, to a
+  hyphen. An id containing an underscore therefore never matches its own literal string in any
+  hardcoded comparison — this was caught by the QA harness (`state.meds.find` returned `undefined`
+  for the underscore spelling) before it shipped; every reference in `index.html` uses the hyphenated
+  form consistently. If adding another custom-id medication in the future, either avoid underscores
+  in the chosen id or always resolve the id via `state.meds.find(...).id` rather than a hardcoded string.
+
+### Appetite tracking (v54)
+- New Reports tab, following the same retrospective one-entry-per-day pattern already established by
+  Bowel Movement: `appetiteEntriesByDay()` builds a `Map` keyed by `dayStart(ts)` (last-write-wins per
+  day), `appetiteFor(dayStartTs)` looks up a single day, `appetiteHistorySorted()` returns every day's
+  entry most-recent-first.
+- `logAppetite(value, dayStartTs, note)` writes one entry: `medId: 'appetite'`, `value` (raw
+  `'normal' | 'little' | 'none'`), `dose` (human label via `APPETITE_LABELS`), `mg: 0`, `ts: dayStartTs
+  + 12h` (midday, so the entry sorts predictably regardless of what time it was actually logged), and
+  an optional `note` field only when the caregiver typed one (empty/whitespace-only notes are trimmed
+  and omitted, not stored as an empty string).
+- `submitAppetite(dayStartTs)` — the Update/Log handler: rejects with a toast if no dropdown value is
+  selected, otherwise deletes that day's existing entry (if any) and adds the new one (overwrite, not
+  append — same delete-then-add pattern as Bowel Movement), wrapped in try/catch per the silent-failure
+  lesson from the v51 Bowel Movement fix (Section 6 above) so a save failure always surfaces a toast
+  rather than failing invisibly.
+- UI (`renderAppetite()`, **Reports → Appetite**): a card showing yesterday's current status (or
+  "Not yet logged"), a `<select>` (Select… / Normal / Little to none / No Appetite) bound to
+  `state.appetiteInput`, an optional `<textarea>` (placeholder "Reason (optional)") bound to
+  `state.appetiteNoteInput`, and an Update/Log button. Below it, an Appetite History list built from
+  `appetiteHistorySorted()`, each row showing the date, the value label, the optional note, a
+  color-coded status dot (green `#0F9D6B` normal / amber `#C77800` little / red `#C0453B` none), and a
+  remove control.
+- `appetite` was added to `BYPASS_48H_IDS` (alongside `weight`, `cycle_start`, `cycle_end`,
+  `bowel_movement`) so a day's answer stays editable/removable past the normal 48-hour permanent-
+  history lock, matching the other retrospective daily-entry features.
+- `reportDescriptor('appetite', now)` supplies the Reports-menu card's label/icon/meta (meta text
+  pulls from `appetiteFor(yesterdayStart(now))` so the menu card previews yesterday's answer without
+  opening the detail view).
 
 ### Vitals
 - **Temperature** — °F. Input shows `tempDefault()` (`98.5`) as an HTML `placeholder` (grayed hint
@@ -314,7 +381,7 @@ See the v51 entry in Version History below.
 
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v53` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v54` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -390,6 +457,31 @@ were corrupted and a cache reset understandably did nothing).
 See TESTING_README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v54 — July 20, 2026
+
+**Tylenol Liquid + Appetite tracking.** Two independent additions, both requested together by Aaron.
+(1) **Tylenol Liquid** — new medication `tylenol-liquid` (30 mL / 1000 mg per dose, its own 6h gap
+independent of pill Tylenol's 4h gap), tracked as a fully separate medication rather than a combined
+pill-vs-liquid toast on the existing Tylenol card, so History/Reports never need to disambiguate "which
+form." A new `ceilingGroup` mechanism pools its mg total with pill Tylenol against their shared existing
+2500 mg/24h daily ceiling (`dailyGroupMg()`/`ceilingGroupMedIds()`), while a wholly separate
+`volumeCeilingMl`/`dailyVolumeMl()` mechanism enforces its own independent 90 mL/24h cap — either limit
+alone is sufficient to lock the medication, and the lock/warning UI reports whichever was actually hit.
+See the new "Tylenol Liquid + shared-ceiling mechanism" subsection in Section 6 above for full details,
+including a naming gotcha caught by QA (`safeMedicationId()` silently converts underscores to hyphens,
+so the id had to be spelled `tylenol-liquid`, not `tylenol_liquid`, everywhere it's referenced). (2)
+**Appetite tracking** — new **Reports → Appetite** tab, following the same retrospective
+one-entry-per-day pattern as Bowel Movement: a previous-day dropdown (Normal / Little to none / No
+Appetite) plus an optional notes field, Update overwrites the day's existing entry rather than
+appending, wrapped in try/catch per the v51 Bowel Movement silent-failure lesson, and included in
+`BYPASS_48H_IDS` so a day's answer stays correctable. See the new "Appetite tracking" subsection in
+Section 6 above. QA: mocked-Firestore harness (hand-rolled fake DOM, no jsdom), 29/29 new checks
+covering dose shape, the required-pain-level gate, both independent gap timers, shared-ceiling mg math
+across both Tylenol forms, the independent volume ceiling, Appetite submit/overwrite/empty-rejection/
+history-sort/Reports-rendering — plus a 25/25 regression pass across the existing missed-dose,
+bowel-movement-update, and bowel-dedup suites (`test_missed_clear_testing.js`, `test_bowel_update_fix.js`,
+`test_bowel_dedup.js`, `test_missed_clear.js`). `sw.js` cache bumped to `caretracker-testing-v54`.
 
 ### v53 — July 20, 2026
 
