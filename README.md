@@ -35,6 +35,8 @@ current version before assigning the next testing version number.
 
 | Version | Date | Based on / ahead of prod | Changes under test | Status |
 |---|---|---|---|---|
+| v50 | Jul 19, 2026 | v49 | **Persistent missed-dose Clear button (Firestore-backed).** Replaces the old ephemeral `state.testMissedClearedAt` Clear button (which reset on every reload) with the same durable version now live in production: clearing writes `{ missedClearedAt: ts }` to a new `caretracker_test_prefs/settings` Firestore document via `subscribePrefs()`/`clearMissedDoses()`, so the cleared state survives reloads and syncs across devices. Kept in its own `caretracker_test_prefs` collection — separate from production's `caretracker_prefs` — via a `PREFS_COL_NAME = TEST_MODE ? 'caretracker_test_prefs' : 'caretracker_prefs'` ternary mirroring the existing `COL_NAME` pattern, so clearing the banner in one app can never affect the other. The Clear button's old `TEST_MODE ? ... : null` gate was removed since this is now real, non-scaffolding functionality. This also makes testing's and production's Clear-button code structurally identical, so a future promotion of this feature is a trivial no-op instead of a regression risk. QA'd with a mocked Firestore harness confirming persistence across a simulated reload *and* that a testing Clear never touches the prod collection. | Testing |
+| v38–v49 | Jul 18–19, 2026 | — | **Documentation gap — not yet backfilled.** These versions were built, QA'd, and pushed to this repo (Dex/Zofran chemo-window fixes, testing UX fixes, a crash hotfix, the Batch A–I testing-only UI/feature work, Bowel Movement + Symptoms tracking, and a pinned Bowel Issue banner) but this table was not updated at the time. Flagged to Aaron on Jul 19, 2026 for a decision on backfilling from commit history as a separate pass. | Testing |
 | v37 | Jul 18, 2026 | v36 | **Senokot as-needed (mirrors prod v33).** Schedule windows removed, quick-log offers 1 pill or 2 pills. Includes a one-shot localStorage migration (`migrateSenokotV37`) so devices with a saved med configuration pick up the new shape — fires only while the saved Senokot is still window-typed, so later manual edits via the Meds page persist. | Testing |
 | v36 | Jul 18, 2026 | v35 | **Backport of production v32 fixes.** Missed-dose coverage is now two-pass dose-to-window assignment: in-window/early doses claim their window first, then late doses (after a window closed, before the next opened) credit the window they follow — fixes the false MISSED alert when a dose was logged the same day (e.g., Dexamethasone at 11 AM + 6 PM flagged Afternoon as missed). A genuinely skipped window still alerts. Early tag now only applies to doses logged before the day's first window. Testing scaffolding untouched and verified intact: TEST_MODE, `caretracker_test_entries` routing, date-override control (simNow), header Testing chip. | Testing |
 | v35 | Jul 18, 2026 | v34 | **Mobile navigation and medication-management overhaul.** Replaced the five top tabs with a fixed four-item bottom navigation: Home, Meds, Reports, and In-Patient. Home preserves the compact v34 Quick Log and all existing medication, chemo, missed-dose, cycle, vitals, and in-patient behavior. Meds adds an editable medication configuration page; configuration is stored only in browser-local storage and does not create or change a Firebase collection or the existing medication-entry data model. Reports is now a menu for the preserved History, Weight, and Cycle detail views, each with a themed back control while the bottom nav remains available. The header is simplified to CareTracker branding, Brandi's Meds, date/time, and the Live sync indicator. | Testing |
@@ -107,10 +109,12 @@ gap-based push reminder system that exists in production does not run here at al
 |---|---|
 | `caretracker_test_entries` | All logged test data — meds, temperature, weight, cycle start/end, in-patient days. **Isolated from real data.** |
 | `caretracker_entries` | Production's real collection — this app must never write here |
+| `caretracker_test_prefs` | Small app-preferences doc (currently just the missed-dose banner's `missedClearedAt` timestamp, v50). **Isolated from prod's `caretracker_prefs`** so clearing the banner in one app never affects the other. |
+| `caretracker_prefs` | Production's preferences collection — this app must never write here |
 
 ## Service Worker Strategy
 
-- Cache name: `caretracker-testing-v35` (bump this — matching the app version above — to force updates on all devices)
+- Cache name: `caretracker-testing-v50` (bump this — matching the app version above — to force updates on all devices)
 - Static assets (cache-first): `./`, `index.html`, `manifest.webmanifest`, icons
 - Firebase/API calls (network-first): `firestore.googleapis.com`, `gstatic.com`, `googleapis.com` — falls back to cache if offline
 
@@ -140,7 +144,7 @@ MISSED rows plus a "N MISSED" day summary in History. Tracking starts July 12, 2
 Morphine, Lidocaine, Imodium, Compazine, and Senokot are as-needed and never flagged. **Any day marked
 In-Patient is fully excluded from missed-dose detection (v30)** — meds given by hospital staff on
 that day aren't tracked here, so nothing for that day is ever flagged as missed, on Today, in the
-Journal, or in History.
+Journal, or in History. **The banner has a Clear button (v50, Firestore-backed via `caretracker_test_prefs`)** that dismisses the current list of misses without deleting the underlying data — new misses occurring after the clear timestamp still show, and the cleared state persists across reloads and devices.
 
 ## Chemo Cycle
 
@@ -161,7 +165,7 @@ The fixed bottom navigation is present on every primary route: **Home**, **Meds*
 **In-Patient**. It replaces the former top-tab bar and reserves bottom safe-area space on phone-sized
 screens.
 
-- **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner, chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
+- **Home** — the former Today experience: In-Patient Active banner (pinned, only when a stay is open), missed-dose banner (with persistent Clear button, v50), chemo banner with Dexamethasone/Zofran badges (when applicable), Period Active banner (when a cycle is open), dose counters, vitals inputs, compact Quick Log cards (shown as Restricted while In-Patient is active), and a grouped "Evening meds" card with a one-tap "Take all" (hidden while In-Patient is active).
 - **Meds** — medication-management page for the active configuration. It lists each medication's display/generic names, dose options, gap/frequency rules, daily limit, and schedule type; supports Add, Edit, and confirmation-protected Delete. The configuration persists in browser-local storage only; dose and vitals history remains in the existing Firestore test collection.
 - **Reports** — a menu of three cards that open preserved detail views while the bottom nav remains visible: **History** (grouped per day into Overnight/Morning/Afternoon/Evening; per-day summaries and rows exclude Weight, Temperature, and In-Patient start/end entries), **Weight** (trend chart and reading history), and **Cycle** (Menstrual Cycle Start/End card plus Cycle History). Each detail view has a themed right-aligned back control to return to Reports.
 - **In-Patient** — Start/End/Undo card plus a history list of hospital stays with real start/end timestamps.

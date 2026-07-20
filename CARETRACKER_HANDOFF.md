@@ -4,30 +4,37 @@
 > `caretracker_test_entries` (never `caretracker_entries`), push/local notifications fully disabled,
 > orange "🧪 Testing app" banner in the header. sw.js cache is `caretracker-testing-vN`. Features
 > under test here that are NOT (yet) in production: chemo cycle system, missed-dose alerts,
-> menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale, Zofran as-needed.
+> menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale, Zofran as-needed,
+> Bowel Movement/Symptoms tracking, persistent Firestore-backed missed-dose Clear.
 > Promote to prod by porting the relevant changes into `care-tracker`'s `index.html` with
 > `TEST_MODE = false` and a prod cache bump — **only when Aaron explicitly says to.**
 
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 18, 2026
-> **Current version:** v37 (testing) (see README.md's versioning convention — this repo's version is always
+> **Last updated:** July 19, 2026
+> **Current version:** v50 (testing) (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
+>
+> **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
+> never got Version History rows in README.md at the time. See README's table for a placeholder note
+> and Section 9 below — flagged to Aaron on Jul 19, 2026 for a decision on backfilling from commit
+> history as a separate pass. This entry (v50) is fully documented.
 
 ---
 
 ## 1. What This Project Is
 
-CareTracker is a **progressive web app (PWA)** that tracks medications, vitals, menstrual cycle, and
-hospital in-patient days for a family caregiver (caring for Brandi). It's a **single-file vanilla
-JavaScript app** — no build step, no framework. The entire app lives in `index.html`. Firebase
-Firestore provides the database with real-time sync. This build has push notifications disabled.
+CareTracker is a **progressive web app (PWA)** that tracks medications, vitals, menstrual cycle,
+hospital in-patient days, bowel movements, and other symptoms for a family caregiver (caring for
+Brandi). It's a **single-file vanilla JavaScript app** — no build step, no framework. The entire app
+lives in `index.html`. Firebase Firestore provides the database with real-time sync. This build has
+push notifications disabled.
 
 **Core user flow:** a caregiver opens the app, taps a quick-log button (e.g. "500 mg" Tylenol), and
 the dose instantly syncs to Firestore across devices. The app enforces dosing limits/gaps where
-relevant, tracks a chemo cycle and flags missed doses, and now also tracks menstrual cycle and
-in-patient hospital days.
+relevant, tracks a chemo cycle and flags missed doses, and now also tracks menstrual cycle, in-patient
+hospital days, and bowel movement/symptom episodes.
 
 ## 2. Links
 
@@ -60,7 +67,8 @@ production, the scheduled/gap-based reminder cron system doesn't exist here at a
 
 - **Language:** Vanilla JavaScript, `<script type="module">` in the shipped app (imports Firebase
   from the gstatic CDN). A separate QA copy rewrites this to a classic `<script>` with a mocked
-  Firestore, since jsdom does not reliably execute module scripts.
+  Firestore, since jsdom does not reliably execute module scripts (this repo's QA harnesses now use a
+  hand-rolled fake DOM instead of jsdom, which proved unreliable in the sandbox).
 - **Rendering:** Custom `h()` hyperscript-style DOM builder + full `render()` on every `setState()`.
 - **Styling:** Inline `<style>` + inline `style` objects on every element. **Theme is light pink
 glassmorphism** (`#FFF0F3` background, `#AA5375`/`#9B5B8A` accents) with compact, high-density Quick
@@ -94,6 +102,17 @@ they're pure event markers, always logged at `Date.now()` (no time picker).
 
 ### `caretracker_entries`
 Production's real collection. **This app must never write here.**
+
+### `caretracker_test_prefs` (added v50)
+Single document (`settings`) holding small, non-medical UI preferences — currently just
+`missedClearedAt` (ms-since-epoch of the last time the missed-dose banner's Clear button was
+pressed). Written via `clearMissedDoses()` / read via `subscribePrefs()`, both synced through
+`onSnapshot` like everything else so the cleared state survives reloads and syncs across devices.
+**Kept separate from production's `caretracker_prefs`** via `PREFS_COL_NAME = TEST_MODE ?
+'caretracker_test_prefs' : 'caretracker_prefs'` — this app must never write to `caretracker_prefs`.
+
+### `caretracker_prefs`
+Production's preferences collection. **This app must never write here.**
 
 ## 6. Medication & Feature Definitions
 
@@ -150,6 +169,21 @@ true** — a day marked In-Patient is fully excluded from missed-dose detection 
 banner, Journal, History), since meds given by hospital staff that day aren't tracked by this app.
 This is per-day: marking *today* in-patient doesn't suppress a genuine miss from *yesterday* still
 showing in the Today banner's rollover section, and vice versa.
+
+**Clear button (v50, persistent).** The Today/Home missed-dose banner has a Clear button
+(`clearMissedDoses()`) that writes `{ missedClearedAt: state.now }` to the `caretracker_test_prefs`
+Firestore document (merge:true), dismissing every currently-listed miss without deleting the
+underlying entries. `renderToday()`'s `bannerItems` filters `bannerItemsAll` to only `m.ts >
+(state.missedClearedAt || 0)`, so a new miss occurring after the clear timestamp reappears normally.
+`missedClearedAt` is loaded on init via `subscribePrefs()` (an `onSnapshot` listener on the prefs
+doc, mirroring `subscribeEntries()`), so the cleared state persists across reloads and syncs across
+devices — this replaces a pre-v50 version that only set an in-memory `state.testMissedClearedAt`
+field, which reset to 0 on every reload and therefore didn't actually solve the "stale entries
+reappear on refresh" problem. The button itself is **not** `TEST_MODE`-gated (it's real
+functionality, not testing scaffolding) — only the collection name it writes to differs from
+production, via `PREFS_COL_NAME = TEST_MODE ? 'caretracker_test_prefs' : 'caretracker_prefs'`,
+mirroring the existing `COL_NAME` pattern. This makes testing's and production's Clear-button code
+paths structurally identical, so promoting this feature to prod is a no-op copy, not a rewrite.
 
 ### Menstrual cycle (v29; Today banner added v30; own tab v32)
 - `cycleEntries()` / `cycleActive()` — active whenever the most recent of `cycle_start`/`cycle_end` is a start.
@@ -237,9 +271,18 @@ manual testing:
 - **Production safety:** confirmed via a dedicated QA pass that re-runs the whole app with
   `TEST_MODE` forced to `false` — the header control doesn't render, and `shiftSimDate()`/
   `setSimDate()` are no-ops (`simNow()` stays equal to real `Date.now()`) even if called directly.
+
+### Bowel Movement & Symptoms tracking (v48–v49)
+Added a **Bowel Movement** retrospective daily card (under Weight) and a **Symptoms** bottom-nav tab
+for logging non-medication health events, plus a pinned **Bowel Issue Active** banner on Home (v49)
+mirroring the pattern already established by the Period Active and In-Patient Active banners. This
+section is intentionally brief pending the v38–v49 documentation backfill noted at the top of this
+file and in Section 9 — see the actual `index.html` for the current implementation details until
+that pass is done.
+
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v35` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v50` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -259,6 +302,14 @@ receives a background message in practice.
    under the repository's standing testing-push authorization. GitHub Pages auto-deploys within about
    one minute. Production remains a separate repo and still requires Aaron's explicit approval.
 4. Devices with the old service worker pick up the new version on next visit.
+5. **New Firestore collections require a Security Rules update, not just an app-code change.**
+   Firestore default-denies any collection without an explicit `allow` rule — adding a `collection()`/
+   `doc()` call in `index.html` alone does nothing for security. See the `caretracker_test_prefs` rule
+   added alongside v50 as the reference example. AI agents in this environment may be hard-blocked
+   from editing Firestore Security Rules directly (a tool-level restriction, not a repo rule) — if so,
+   hand Aaron the exact rule block/full rules file to paste and publish himself, and don't consider
+   the feature done until he's confirmed it's published and you've verified live that the
+   `permission-denied` error is gone.
 
 ### Cache reset
 Visit this app's `reset.html` — unregisters service workers, clears caches, redirects with a
@@ -271,23 +322,45 @@ cache-busting query string.
    system that never existed here; it had been copy-pasted from production almost verbatim. If
    anything in this document looks inconsistent with the actual `index.html`, trust the code and
    fix the doc — don't propagate the mismatch further.
-2. **No authentication** — anyone with the URL can read/write test data. Not a real risk since this
+2. **v38–v49 version-history gap (open, Jul 19 2026).** These versions were built, QA'd, and pushed
+   to this repo — Dex/Zofran chemo-window fixes, testing UX fixes, a crash hotfix, the Batch A–I
+   testing-only UI/feature work, Bowel Movement + Symptoms tracking, and a pinned Bowel Issue banner
+   — but README's Version History table was not updated at the time each shipped. Flagged to Aaron
+   on Jul 19, 2026 (while documenting v50) for a decision on backfilling accurate rows from commit
+   history as a separate pass, rather than guessing at the details here.
+3. **No authentication** — anyone with the URL can read/write test data. Not a real risk since this
    collection isn't real medical data, but worth knowing.
-3. **Shared Firebase project** (`fuelforge-7c132`) — isolated from prod only by collection name, not
+4. **Shared Firebase project** (`fuelforge-7c132`) — isolated from prod only by collection name, not
    by a separate project. Don't touch project-level Firebase settings without checking prod impact.
-4. **Zofran's chemo-day block is independent of its (now-removed) gap timer** — don't assume
+5. **Zofran's chemo-day block is independent of its (now-removed) gap timer** — don't assume
    `gapH: 0` means Zofran is unrestricted; `status()` checks `zofranBlockedOn()` before the gap logic
    and still locks it (with override) on chemo days 0–1.
-5. **`painLevel` is required for new Tylenol and Morphine entries** — `confirmTimeAndLog()` rejects a
+6. **`painLevel` is required for new Tylenol and Morphine entries** — `confirmTimeAndLog()` rejects a
    blank selection. Older test records from before v30 may not have a value, so history rendering must
    remain tolerant of it.
-6. **Single-file architecture** — same tradeoff as prod: simple, but one large file to edit carefully.
+7. **Single-file architecture** — same tradeoff as prod: simple, but one large file to edit carefully.
 
 ## 10. Version History
 
 See README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
-counter).
+counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v50 — July 19, 2026
+
+**Persistent missed-dose Clear button (Firestore-backed).** Replaces the ephemeral in-memory
+`state.testMissedClearedAt` Clear button (reset to 0 on every reload, so a "cleared" banner would
+reappear as soon as the page refreshed) with the same durable version now live in production:
+clearing writes `{ missedClearedAt: state.now }` to a new `caretracker_test_prefs/settings` document
+via `clearMissedDoses()`, loaded back on every app start via `subscribePrefs()`'s `onSnapshot`
+listener. Uses its own `caretracker_test_prefs` collection — never shared with production's
+`caretracker_prefs` — via a `PREFS_COL_NAME` ternary mirroring the existing `COL_NAME` pattern, so a
+Clear tap in one app can never affect the other; verified in the mocked-Firestore QA harness. The
+button's old `TEST_MODE ? ... : null` gate was removed, since this is now real functionality rather
+than testing scaffolding — testing's and production's Clear-button code are now structurally
+identical, so a future promotion is a trivial copy instead of a regression risk. `sw.js` cache bumped
+to `caretracker-testing-v50`. Required a new Firestore Security Rule for `caretracker_test_prefs`,
+handed to Aaron to paste/publish per the Section 8 note above.
 
 ### v35 — July 18, 2026
 
@@ -351,5 +424,5 @@ A dormant `seedDemo()` function fired whenever the app's first Firestore snapsho
 **When you make any change to this repo, update `CLAUDE.md`, `README.md`, and this file in the same
 pass.** Specifically here: bump "Last updated" / "Current version" above, add a row to Section 10's
 pointer target (README's table), and revise any of Sections 4–9 that the change affects. Stale docs
-in this exact repo have already caused real confusion once (see Known Issues #1) — don't let it
-happen again.
+in this exact repo have already caused real confusion once (see Known Issues #1) and again with the
+v38–v49 gap (see Known Issues #2) — don't let it happen a third time.
