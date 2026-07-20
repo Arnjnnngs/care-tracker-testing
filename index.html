@@ -729,11 +729,15 @@ function daysSinceBowelIssueStart() {
 async function submitBowelMovement(dayStartTs) {
   const v = state.bowelInput;
   if (!v) { setToast('Select a bowel movement status first'); return; }
-  const existing = bowelMovementFor(dayStartTs);
-  if (existing) await removeEntryDB(existing.id);
-  await logBowelMovement(v, dayStartTs);
-  setState({ bowelInput: undefined });
-  setToast('Bowel movement logged — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+  try {
+    const existing = bowelMovementFor(dayStartTs);
+    if (existing) await removeEntryDB(existing.id);
+    await logBowelMovement(v, dayStartTs);
+    setState({ bowelInput: undefined });
+    setToast('Bowel movement logged — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+  } catch (e) {
+    setToast('Could not save — check connection and try again');
+  }
 }
 // Quick-update from the pinned "Bowel Issue Active" banner (mirrors submitBowelMovement, but
 // targets whichever day is currently driving the active streak — not necessarily "yesterday" —
@@ -743,11 +747,15 @@ async function submitBowelBannerUpdate() {
   const v = state.bowelBannerInput;
   if (day === null) return;
   if (!v) { setToast('Select a bowel movement status first'); return; }
-  const existing = bowelMovementFor(day);
-  if (existing) await removeEntryDB(existing.id);
-  await logBowelMovement(v, day);
-  setState({ bowelBannerInput: undefined });
-  setToast('Bowel movement updated — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+  try {
+    const existing = bowelMovementFor(day);
+    if (existing) await removeEntryDB(existing.id);
+    await logBowelMovement(v, day);
+    setState({ bowelBannerInput: undefined });
+    setToast('Bowel movement updated — ' + (BOWEL_MOVEMENT_LABELS[v] || v));
+  } catch (e) {
+    setToast('Could not save — check connection and try again');
+  }
 }
 
 // ---- Symptoms tracking ----
