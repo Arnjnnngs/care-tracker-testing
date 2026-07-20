@@ -94,6 +94,24 @@ async function addEntryDB(entry) { await addDoc(col, entry); }
 async function removeEntryDB(id) { await deleteDoc(doc(db, COL_NAME, id)); }
 // clearAllDB removed - history must be preserved
 
+// Persisted app preferences (small single doc, synced like everything else via onSnapshot so a
+// "Clear" action survives reloads and syncs across devices — unlike a plain in-memory field).
+// Kept in a separate TEST_MODE-scoped collection so clearing the banner here never touches prod.
+const PREFS_COL_NAME = TEST_MODE ? 'caretracker_test_prefs' : 'caretracker_prefs';
+const PREFS_DOC = doc(db, PREFS_COL_NAME, 'settings');
+function subscribePrefs(callback) {
+  return onSnapshot(PREFS_DOC, (snap) => { callback(snap.exists() ? snap.data() : {}); });
+}
+async function clearMissedDoses() {
+  const ts = state.now;
+  try {
+    await setDoc(PREFS_DOC, { missedClearedAt: ts }, { merge: true });
+    setToast('Missed doses cleared');
+  } catch (e) {
+    setToast('Could not save — check connection and try again');
+  }
+}
+
 // ---------- React via htm + preact-like approach using vanilla ----------
 // Using a minimal reactive approach with vanilla JS for zero build step
 
@@ -223,9 +241,10 @@ const CONFIG = { patientName: 'Brandi', ceilingMg: 2500, tempUnit: 'Fahrenheit' 
 
 // State
 const initialMedicationConfig = loadMedicationConfig();
-let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, testMissedClearedAt: 0, confirmClearChemo: false };
+let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, missedClearedAt: 0, confirmClearChemo: false };
 let toastTimer = null;
 let unsub = null;
+let unsubPrefs = null;
 let pendingEntries = null;
 
 function setState(patch) {
@@ -1121,17 +1140,18 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     const label = d === dayStart(now) ? 'Today' : (d === dayStart(now) - 86400000 ? 'Yesterday' : new Date(d).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }));
     missedDosesFor(d, now).forEach(m => bannerItemsAll.push({ ...m, when: label }));
   }
-  const bannerItems = bannerItemsAll.filter(m => m.ts > (state.testMissedClearedAt || 0));
+  const bannerItems = bannerItemsAll.filter(m => m.ts > (state.missedClearedAt || 0));
 
-  // MISSED DOSE ALERT — always on top; in testing, a Clear button lets the tester acknowledge
+  // MISSED DOSE ALERT — always on top; a Clear button lets the caregiver acknowledge
   // and dismiss the current list without deleting the underlying data (new misses still show).
+  // Persisted via Firestore (caretracker_test_prefs) so it survives reloads across devices.
   if (bannerItems.length) {
     parts.push(h('div', { style: { background: 'rgba(192,69,59,0.16)', border: '2px solid #C0453B', borderRadius: '16px', padding: '15px 16px', display: 'flex', gap: '12px', alignItems: 'flex-start', boxShadow: '0 4px 24px rgba(192,69,59,0.25)' } },
       h('span', { style: { flexShrink: '0', width: '28px', height: '28px', borderRadius: '50%', background: '#C0453B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '17px' } }, '!'),
       h('div', { style: { flex: '1' } },
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '4px' } },
           h('div', { style: { fontWeight: '800', color: '#C0453B', fontSize: '15.5px', letterSpacing: '0.02em', textTransform: 'uppercase' } }, 'Missed dose' + (bannerItems.length > 1 ? 's' : '')),
-          TEST_MODE ? h('button', { onClick: () => setState({ testMissedClearedAt: state.now }), style: { flexShrink: '0', minHeight: '30px', padding: '0 12px', borderRadius: '99px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '11.5px', fontWeight: '800' } }, 'Clear') : null
+          h('button', { onClick: clearMissedDoses, style: { flexShrink: '0', minHeight: '30px', padding: '0 12px', borderRadius: '99px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '11.5px', fontWeight: '800' } }, 'Clear')
         ),
         h('div', { style: { color: '#A13830', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } },
           bannerItems.map(m => m.when + ': ' + nameOf(m.medId) + ' — ' + m.windowName + ' window (' + fmtTime(m.ts) + ') closed with no dose logged').join(' · '))
@@ -2369,6 +2389,9 @@ function checkNotifications() {
 subscribePush();
 
 // Init
+unsubPrefs = subscribePrefs((prefs) => {
+  setState({ missedClearedAt: prefs.missedClearedAt || 0 });
+});
 unsub = subscribeEntries((entries) => {
   const wasEmpty = state.entries.length === 0 && !state.loaded;
   if (state.timeModal) {
