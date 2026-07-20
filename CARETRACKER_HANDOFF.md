@@ -13,13 +13,13 @@
 > without prior knowledge. See `CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 19, 2026
-> **Current version:** v50 (testing) (see README.md's versioning convention — this repo's version is always
+> **Current version:** v51 (testing) (see README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in README.md at the time. See README's table for a placeholder note
 > and Section 9 below — flagged to Aaron on Jul 19, 2026 for a decision on backfilling from commit
-> history as a separate pass. This entry (v50) is fully documented.
+> history as a separate pass. v50 and v51 are fully documented.
 
 ---
 
@@ -280,9 +280,25 @@ section is intentionally brief pending the v38–v49 documentation backfill note
 file and in Section 9 — see the actual `index.html` for the current implementation details until
 that pass is done.
 
+**Two distinct Update controls (important for debugging).** When a Bowel Issue is active, both the
+pinned banner and the retrospective card render at the same time, and both look like a "select a
+status, tap Update" control — but `submitBowelBannerUpdate()` (banner) always targets
+`latestBowelDay()` (whichever day is currently driving the active streak — often today), while
+`submitBowelMovement()` (retrospective card) always targets yesterday specifically, regardless of
+what the banner is doing. If a user reports one of these "not doing anything," check which control
+they actually used before assuming the write failed.
+
+**Silent-failure fix (v51).** Both functions used a delete-old-entry-then-add-new-entry pattern with
+no error handling — if either Firestore call failed for any reason, the async function threw and
+aborted before reaching `setToast()`, so the UI gave zero feedback that anything went wrong. This is
+exactly what Aaron reported ("doesn't look like it does anything"). Fixed by wrapping both in
+try/catch mirroring `clearMissedDoses()`'s pattern: on failure they now show "Could not save — check
+connection and try again" and leave the pending selection in place rather than silently resetting it.
+See the v51 entry in Version History below.
+
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v50` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v51` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -345,6 +361,20 @@ cache-busting query string.
 See README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v51 — July 19, 2026
+
+**Fix: Bowel Movement Update silently doing nothing on failure.** Aaron reported the Update button
+on the Bowel Movement card "doesn't look like it does anything." Root cause: `submitBowelMovement()`
+and `submitBowelBannerUpdate()` had no try/catch around their delete-old-entry + add-new-entry
+Firestore calls — any failure threw and aborted the function before it reached `setToast()`, so the
+UI gave no feedback at all. Fixed by wrapping both in try/catch matching `clearMissedDoses()`'s
+existing pattern: failures now show "Could not save — check connection and try again" and leave the
+pending selection in place. Also documented (see Section 6's Bowel Movement subsection) that the
+pinned "Bowel Issue Active" banner and the retrospective card are two separate Update controls that
+can be on screen simultaneously and target different days — a likely source of confusion distinct
+from the error-handling bug itself. QA: mocked-Firestore harness, 7/7 checks (success path, delete
+failure, add failure, banner handler). `sw.js` cache bumped to `caretracker-testing-v51`.
 
 ### v50 — July 19, 2026
 
