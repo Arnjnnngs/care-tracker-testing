@@ -125,7 +125,7 @@ const DEFAULT_MEDS = [
     doses:[{label:'30 mL (1000 mg)',mg:1000}] },
   { id:'zofran', name:'Zofran', sub:'Ondansetron', type:'gap', gapH:0, note:'As needed — no gap timer' },
   { id:'compazine', name:'Compazine', sub:'Prochlorperazine', type:'gap', gapH:6, note:'10 PM · earlier as needed · min 6h gap' },
-  { id:'morphine', name:'Morphine', sub:'Immediate release', type:'gap', gapH:4, note:'4-hour gap', painScale:true,
+  { id:'morphine', name:'Morphine', sub:'Immediate release', type:'gap', gapH:4, ceiling:true, ceilingMax:15, rollingCeilingH:4, note:'Up to 15 mg per rolling 4-hour window', painScale:true,
     doses:[{label:'½ tab · 7.5 mg',mg:7.5},{label:'Full · 15 mg',mg:15}] },
   { id:'lidocaine', name:'Lidocaine', sub:'Topical cream', type:'gap', gapH:4, ceiling:true, ceilingMax:4, ceilingUnit:'applications', note:'Min 4-hour gap · max 4 applications/day',
     doses:[{label:'Apply',pills:1,mg:0}] },
@@ -311,6 +311,29 @@ function isEarlyAt(med, ts) {
 }
 function usedRecently(id) { return entriesFor(id).some(e => e.ts >= state.now - 7 * 86400000); }
 function dailyDoseMg(medId) { const c = dayStart(state.now); return entriesFor(medId).filter(e => e.ts >= c).reduce((sum, entry) => sum + (entry.mg || 0), 0); }
+// Rolling-window mg sum (e.g. Morphine's 15 mg per any trailing 4 hours) — unlike dailyDoseMg this
+// does NOT reset at midnight; it only counts doses within windowH hours of `now`, so a dose "ages
+// out" and frees up room exactly windowH hours after it was taken, regardless of the clock date.
+function rollingDoseMg(medId, windowH, now) { const c = now - windowH * 3600000; return entriesFor(medId).filter(e => e.ts > c && e.ts <= now).reduce((sum, entry) => sum + (entry.mg || 0), 0); }
+// For a rolling-window mg ceiling, once it's hit, find the earliest future timestamp at which
+// enough of the currently-counted doses will have aged out of the window to leave room for at
+// least the smallest configured dose again (e.g. after one 15mg dose, or two 7.5mg half-doses,
+// this returns when the oldest dose(s) roll off enough to allow another half dose).
+function rollingCeilingAvailableAt(med) {
+  const windowH = med.rollingCeilingH;
+  const windowMs = windowH * 3600000;
+  const max = medicationCeilingMax(med);
+  const doseMgs = (med.doses || []).map(d => d.mg || 0).filter(mg => mg > 0);
+  const roomNeeded = doseMgs.length ? Math.min(...doseMgs) : 0;
+  const now = state.now;
+  const inWindow = entriesFor(med.id).filter(e => e.ts > now - windowMs).sort((a, b) => a.ts - b.ts);
+  let used = inWindow.reduce((sum, e) => sum + (e.mg || 0), 0);
+  for (const e of inWindow) {
+    used -= (e.mg || 0);
+    if (max - used >= roomNeeded) return e.ts + windowMs;
+  }
+  return now;
+}
 // Meds sharing a ceilingGroup (e.g. Tylenol pills + Tylenol Liquid) count against ONE combined
 // daily mg ceiling, since it's the same acetaminophen safety limit regardless of dosage form.
 function ceilingGroupMedIds(med) {
@@ -338,8 +361,9 @@ function dailyCeiling(med) {
   const max = medicationCeilingMax(med);
   if (!max) return null;
   if (med.ceilingUnit) return { used: dailyPills(med.id), max, unit: med.ceilingUnit, label: max + ' ' + med.ceilingUnit };
-  const used = med.ceilingGroup ? dailyGroupMg(med) : dailyDoseMg(med.id);
-  return { used, max, unit: 'mg', label: max.toLocaleString() + ' mg' };
+  const used = med.rollingCeilingH ? rollingDoseMg(med.id, med.rollingCeilingH, state.now) : (med.ceilingGroup ? dailyGroupMg(med) : dailyDoseMg(med.id));
+  const label = max.toLocaleString() + ' mg' + (med.rollingCeilingH ? (' / ' + med.rollingCeilingH + 'h') : '');
+  return { used, max, unit: 'mg', label };
 }
 // Missed-dose detection. A window counts as covered by any dose logged that day
 // before the window closed (and after the previous window closed) — so early logs
@@ -452,6 +476,11 @@ function status(med) {
     if (med.ceiling) {
       const dc = dailyCeiling(med);
       if (dc && dc.used >= dc.max) {
+        if (med.rollingCeilingH) {
+          // Rolling-window ceiling (e.g. Morphine's 15 mg / 4h): the lockout self-resolves as old
+          // doses age out of the window, not at midnight — compute the actual next-available time.
+          return { locked: true, ceilingHit: true, rollingCeiling: true, ceilingLabel: dc.label, availableAt: rollingCeilingAvailableAt(med) };
+        }
         return { locked: true, ceilingHit: true, ceilingLabel: dc.label };
       }
     }
@@ -462,6 +491,11 @@ function status(med) {
         return { locked: true, ceilingHit: true, ceilingLabel: vc.label };
       }
     }
+    // Rolling-ceiling meds (Morphine) are gated solely by the mg ceiling above — a half dose must
+    // NOT trigger a flat gapH lockout the way a full dose does, since there's still 7.5 mg of room
+    // left in the 4-hour window. Per-dose-button blocking (doseBlocked, in the render loop) still
+    // prevents logging a dose that would push the rolling total over the ceiling.
+    if (med.rollingCeilingH) return { locked: false };
     const last = es[es.length - 1];
     if (!last) return { locked: false };
     const at = last.ts + med.gapH * 3600000;
@@ -1599,7 +1633,9 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     const lastLabel = last ? ('Last dose ' + fmtDateLabel(last.ts) + (last.dose ? (' · ' + last.dose) : '')) : 'No doses logged';
     // Next dose label
     let nextDoseLabel = '';
-    if (st.ceilingHit) {
+    if (st.ceilingHit && st.rollingCeiling) {
+      nextDoseLabel = 'Next dose at ' + fmtTime(st.availableAt);
+    } else if (st.ceilingHit) {
       const tmrw = dayStart(now) + 86400000;
       nextDoseLabel = 'Next dose tomorrow after midnight';
     } else if (st.chemoBlock) {
@@ -1615,7 +1651,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     let subStatus = '';
     const dc = med.ceiling ? dailyCeiling(med) : null;
     if (st.ceilingHit) {
-      subStatus = 'Daily limit reached (' + (dc ? dc.label : CONFIG.ceilingMg.toLocaleString() + ' mg') + ')';
+      subStatus = st.rollingCeiling ? ((dc ? dc.label : '15 mg') + ' reached in the last ' + med.rollingCeilingH + 'h') : ('Daily limit reached (' + (dc ? dc.label : CONFIG.ceilingMg.toLocaleString() + ' mg') + ')');
     } else if (st.windowName) {
       subStatus = st.windowName + ' window open';
     }
@@ -1627,7 +1663,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
       const amt = med.ceilingUnit ? (d.pills || 0) : (d.mg || 0);
       return amt > 0 && amt > (dc.max - dc.used);
     };
-    const blockedBtn = (d) => h('button', { onClick: () => setToast('Exceeds today’s ' + dc.label + ' limit — ' + (med.ceilingUnit ? (dc.max - dc.used) + ' ' + dc.unit : (dc.max - dc.used).toLocaleString() + ' mg') + ' left'), style: { flex: '0 0 auto', minWidth: '0', minHeight: '32px', padding: '0 12px', borderRadius: '999px', background: 'rgba(255,255,255,0.35)', border: '1px dashed rgba(138,100,121,0.35)', color: '#765B69', fontSize: '12px', fontWeight: '600', cursor: 'not-allowed' } }, (d.single ? ('Log ' + med.name) : d.label) + ' · over limit');
+    const blockedBtn = (d) => h('button', { onClick: () => setToast('Exceeds ' + (med.rollingCeilingH ? 'the ' : 'today’s ') + dc.label + ' limit — ' + (med.ceilingUnit ? (dc.max - dc.used) + ' ' + dc.unit : (dc.max - dc.used).toLocaleString() + ' mg') + ' left'), style: { flex: '0 0 auto', minWidth: '0', minHeight: '32px', padding: '0 12px', borderRadius: '999px', background: 'rgba(255,255,255,0.35)', border: '1px dashed rgba(138,100,121,0.35)', color: '#765B69', fontSize: '12px', fontWeight: '600', cursor: 'not-allowed' } }, (d.single ? ('Log ' + med.name) : d.label) + ' · over limit');
 
     // Buttons
     let buttonArea;
@@ -1643,7 +1679,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
       buttonArea = h('div', { style: { background: 'rgba(192,69,59,0.12)', border: '1px solid rgba(192,69,59,0.25)', borderRadius: '13px', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '7px' } },
         h('div', { style: { fontSize: '11.5px', color: '#A15B56', fontWeight: '600', lineHeight: '1.35', display: 'flex', alignItems: 'center', gap: '7px' } },
           h('span', { style: { flexShrink: '0', width: '18px', height: '18px', borderRadius: '50%', background: '#C0453B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '12px' } }, '!'),
-          st.ceilingHit ? ('Daily ' + (dc ? dc.label : CONFIG.ceilingMg.toLocaleString() + ' mg') + ' ceiling reached. Log more anyway?') : st.chemoBlock ? 'Care team said no Zofran on chemo days. Log it anyway?' : ('Closed — opens in ' + countdownLabel + '. Log it early anyway?')
+          st.ceilingHit ? ((med.rollingCeilingH ? '' : 'Daily ') + (dc ? dc.label : CONFIG.ceilingMg.toLocaleString() + ' mg') + ' ceiling reached. Log more anyway?') : st.chemoBlock ? 'Care team said no Zofran on chemo days. Log it anyway?' : ('Closed — opens in ' + countdownLabel + '. Log it early anyway?')
         ),
         h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
           ...doseList.map(d => doseBlocked(d) ? blockedBtn(d) : h('button', { onClick: () => logMed(med.id, d.single ? null : d, { force: true }), style: { flex: '0 0 auto', minWidth: '0', minHeight: '34px', padding: '0 13px', borderRadius: '999px', background: '#C0453B', color: '#fff', fontSize: '12.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(120,40,34,0.4)' } }, d.single ? 'Override — log now' : ('Log ' + d.label + ' now'))),
@@ -1776,11 +1812,18 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
 
 function formatRuleSummary(med) {
   const fragments = [];
-  if (med.type === 'gap') fragments.push(med.gapH > 0 ? ('Min ' + med.gapH + '-hour gap') : 'As needed');
-  else if (med.windows && med.windows.length) fragments.push(med.windows.map(window => window.name || (formatHour(window.start) + '–' + formatHour(window.end))).join(' · '));
+  if (med.rollingCeilingH) {
+    // Rolling-window ceiling meds (e.g. Morphine) are governed by the cumulative-mg limit below,
+    // not a flat per-dose gap — skip the "Min X-hour gap" fragment so it isn't shown alongside a
+    // rule that no longer applies.
+  } else if (med.type === 'gap') {
+    fragments.push(med.gapH > 0 ? ('Min ' + med.gapH + '-hour gap') : 'As needed');
+  } else if (med.windows && med.windows.length) {
+    fragments.push(med.windows.map(window => window.name || (formatHour(window.start) + '–' + formatHour(window.end))).join(' · '));
+  }
   if (med.ceiling) {
     const limit = medicationCeilingMax(med);
-    if (limit) fragments.push('Daily limit ' + limit + ' ' + (med.ceilingUnit || 'mg'));
+    if (limit) fragments.push((med.rollingCeilingH ? ('Up to ' + limit + ' ' + (med.ceilingUnit || 'mg') + ' per ' + med.rollingCeilingH + 'h') : ('Daily limit ' + limit + ' ' + (med.ceilingUnit || 'mg'))));
   }
   return fragments.join(' · ') || (med.note || 'No schedule rule set');
 }

@@ -4,9 +4,10 @@
 > `caretracker_test_entries` (never `caretracker_entries`), push/local notifications fully disabled,
 > orange "🧪 Testing app" banner in the header. sw.js cache is `caretracker-testing-vN`. Features
 > under test here that are NOT (yet) in production: chemo cycle system, missed-dose alerts,
-> menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale, Zofran as-needed,
-> Bowel Movement/Symptoms tracking, persistent Firestore-backed missed-dose Clear, Tylenol Liquid
-> (shared-ceiling + own volume cap), Appetite tracking.
+> menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale + rolling 4h/15mg
+> dosing ceiling (v56), Zofran as-needed, Bowel Movement/Symptoms tracking, persistent
+> Firestore-backed missed-dose Clear, Tylenol Liquid (shared-ceiling + own volume cap), Appetite
+> tracking.
 > Promote to prod by porting the relevant changes into `care-tracker`'s `index.html` with
 > `TEST_MODE = false` and a prod cache bump — **only when Aaron explicitly says to.**
 
@@ -14,7 +15,7 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 20, 2026
-> **Current version:** v55 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v56 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
@@ -142,7 +143,7 @@ Production's preferences collection. **This app must never write here.**
 | `tylenol-liquid` | Tylenol Liquid | Added v54. Oral suspension form, tracked as a fully separate medication (not folded into the `tylenol` card) so History/Reports never have to disambiguate "which Tylenol." 30 mL (1000 mg) per dose, its own independent 6h gap (does not interact with pill Tylenol's 4h gap), `painScale: true` + required (same as pill Tylenol). `ceilingGroup: 'tylenol'` — its mg total is pooled with pill Tylenol against the same 2500 mg/24h ceiling. `volumeCeilingMl: 90` + `volumePerDoseMl: 30` — a second, independent ceiling on its own 90 mL/24h, tracked only from this medication's own entries (pill Tylenol doses never count toward the volume total, and Liquid doses never count toward anything but the shared mg ceiling and its own volume ceiling) |
 | `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–1 via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
 | `compazine` | Compazine | 6h min gap, shown in Evening meds card |
-| `morphine` | Morphine | 4h min gap, ½ tab (7.5 mg) / full tab (15 mg). **`painScale: true` (v29), required as of v30** — time modal shows a 1–10 "Pain level" dropdown; `Not recorded` (blank) is no longer a valid choice for Confirm, `confirmTimeAndLog()` rejects the submission otherwise. Stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field/requirement (see above) |
+| `morphine` | Morphine | **Rolling 4h / 15 mg ceiling (v56, replaces the old flat 4h gap)** — `ceiling:true, ceilingMax:15, rollingCeilingH:4`; ½ tab (7.5 mg) / full tab (15 mg) doses. Locks only once cumulative mg logged in the trailing 4 hours reaches 15 — see Section 6a below for the full model. **`painScale: true` (v29), required as of v30** — time modal shows a 1–10 "Pain level" dropdown; `Not recorded` (blank) is no longer a valid choice for Confirm, `confirmTimeAndLog()` rejects the submission otherwise. Stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field/requirement (see above) |
 | `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
 | `imodium` | Imodium | Daily limit 4 pills |
 | `protonix` | Protonix | Windows 8 AM–noon & 8–10 PM, missed-dose tracked |
@@ -416,9 +417,53 @@ try/catch mirroring `clearMissedDoses()`'s pattern: on failure they now show "Co
 connection and try again" and leave the pending selection in place rather than silently resetting it.
 See the v51 entry in Version History below.
 
+## 6a. Morphine Rolling-Window Dosing Ceiling (v56)
+
+**The bug Aaron reported:** Morphine used to be a plain `type:'gap', gapH:4` medication — `status()`
+looked at only the single most recent entry and locked for a flat 4 hours after it, regardless of
+dose size. Logging a ½ tab (7.5 mg) locked the med for the same 4 hours as a full 15 mg dose, even
+though the actual prescription allows up to 15 mg total per any rolling 4-hour window — so a lone
+half dose should leave 7.5 mg of room, not trigger a full lockout.
+
+**The fix:** Morphine is now `type:'gap', ceiling:true, ceilingMax:15, rollingCeilingH:4` (doses
+unchanged: ½ tab 7.5 mg / full 15 mg). This reuses the same `ceiling` infrastructure Tylenol's daily
+2500 mg cap already uses, with one difference: `dailyCeiling(med)` checks `med.rollingCeilingH` and,
+if set, sums mg via the new `rollingDoseMg(medId, windowH, now)` helper (entries with
+`ts > now - windowH*3600000`) instead of `dailyDoseMg()`'s calendar-day sum. This means the 15 mg
+count does **not** reset at midnight — each dose "ages out" of the ceiling exactly `rollingCeilingH`
+hours (4h) after it was taken, whatever the clock date is.
+
+`status(med)` locks Morphine only when the rolling sum reaches 15 mg (one full dose, or two half
+doses) — a lone half dose returns `{ locked: false }`. The pre-existing per-dose-button blocking
+(`doseBlocked`, in the Quick Log render loop — originally built for Tylenol) needed **no changes** at
+all: since it already reads `dailyCeiling(med)`'s `{used, max}`, it automatically blocks the Full
+15 mg button once a half dose is logged (7.5 + 15 > 15) while leaving the ½ tab button enabled
+(7.5 + 7.5 = 15, not blocked) — this is the same UI mechanism Tylenol uses for its shared ceiling.
+
+**Next-available time.** When the ceiling *is* hit, `rollingCeilingAvailableAt(med)` computes the
+real roll-off time instead of Tylenol's "tomorrow after midnight": it walks the in-window doses
+oldest-first, removing each one's mg as if it just aged out (at `dose.ts + windowH`), and returns the
+first such timestamp where the remaining sum leaves room for at least the smallest configured dose
+(7.5 mg). For a single full dose this is simply `doseTs + 4h`. For two half doses, it's `4h after the
+older of the two` — once that one ages out, only 7.5 mg remains counted, exactly enough room for
+another half dose. `status()` returns this as `availableAt` with a new `rollingCeiling: true` flag so
+the render loop shows `'Next dose at ' + fmtTime(availableAt)` instead of the ceiling-hit meds'
+default "tomorrow after midnight" text.
+
+**Everything else localized to Morphine specifically** — no other medication sets `rollingCeilingH`,
+so `dailyDoseMg`, `dailyGroupMg`, and Tylenol's midnight-reset ceiling are untouched.
+`formatRuleSummary()` (the med-rules summary text) and a handful of user-facing strings (the
+over-limit toast, the override-flow "ceiling reached" message, the badge sub-label) were made
+`rollingCeilingH`-aware so none of them read "daily"/"today's" for a rolling window. QA: new 14/14
+mocked-Firestore suite (`test_morphine_rolling.js`) — full dose locks 4h from that dose; a lone half
+dose does not lock; two half doses reaching 15 mg lock until the older one rolls off; doses spaced
+apart in the window roll off in the correct order; doses older than 4h no longer count at all; and
+two live-rendered checks confirming the Quick Log badge/blocked-button/lockout-time output directly.
+See the v56 Version History entry below for the full regression numbers.
+
 ## 7. Service Worker
 
-**Cache name:** `caretracker-testing-v55` — bump this (using this repo's own version number, see
+**Cache name:** `caretracker-testing-v56` — bump this (using this repo's own version number, see
 README) on every deploy to force devices to refresh.
 
 **Cached shell:** `'./'`, `'index.html'`, `'manifest.webmanifest'`, icons.
@@ -494,6 +539,31 @@ were corrupted and a cache reset understandably did nothing).
 See TESTING_README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v56 — July 20, 2026
+
+**Morphine: rolling 4-hour / 15 mg dosing ceiling, replacing the old flat "last dose + 4h" lockout.**
+Aaron reported that logging a ½ tab (7.5 mg) dose locked Morphine out for a full 4 hours, same as a
+full 15 mg dose, and asked for the app to reflect that up to 15 mg total is allowed per 4-hour window
+so a half dose shouldn't fully lock her out. This is the same feature referenced (but never built) by
+the destructive Jul 19–20 incident commit — see the warning at the top of this document and the v53
+entry below; it is now actually implemented. Full technical detail in the new Section 6a above. In
+short: Morphine moved from `type:'gap', gapH:4` to a rolling-window ceiling
+(`ceiling:true, ceilingMax:15, rollingCeilingH:4`), reusing Tylenol's existing ceiling
+infrastructure with a new rolling-sum helper (`rollingDoseMg`) instead of the calendar-day sum, plus
+a new `rollingCeilingAvailableAt()` that computes the real roll-off time (when enough of the counted
+doses age out of the window to free up room for another half dose) instead of a flat gap. Per-dose
+button blocking needed no code changes — it already reused the same ceiling read/write path. QA:
+new 14/14 mocked-Firestore suite (`test_morphine_rolling.js`) covering full-dose lock, lone-half-dose
+non-lock, two-half-doses-reach-ceiling lock with correct roll-off ordering, doses aging fully out of
+the window, and two live-rendered Quick Log checks (badge + blocked button + lockout time). Full
+regression pass across all current suites — `test_bowel_dedup.js` (10/10), `test_bowel_update_fix.js`
+(7/7), `test_missed_clear_testing.js` (15/15), `test_daily_alerts_v54.js` (25/25),
+`test_tylenol_liquid_appetite.js` (29/29) — 100/100 combined with the new suite. `sw.js` cache bumped
+to `caretracker-testing-v56`. (Two legacy jsdom-based test files, `test_bowel_symptoms.js` and
+`test_render.js`, both point at a stale `/tmp/test-latest/index.html` path from an old workflow and
+hang/fail to run in this sandbox — pre-existing and unrelated to this change; every current suite uses
+the hand-rolled fake-DOM harness pattern instead, per the note already in `test_missed_clear.js`.)
 
 ### v55 — July 20, 2026
 
