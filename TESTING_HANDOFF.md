@@ -5,9 +5,12 @@
 > orange "🧪 Testing app" banner in the header. sw.js cache is `caretracker-testing-vN`. Features
 > under test here that are NOT (yet) in production: chemo cycle system, missed-dose alerts,
 > menstrual cycle tracking, In-Patient day tracking, Morphine pain-level scale + rolling 4h/15mg
-> dosing ceiling (v56), Zofran as-needed, Bowel Movement/Symptoms tracking, persistent
+> dosing ceiling (v56), Zofran as-needed, Bowel Movement/Symptoms tracking (Diarrhea/Constipation
+> removed from the dropdown as of v57, replaced with a required-note "Other"), persistent
 > Firestore-backed missed-dose Clear, Tylenol Liquid (shared-ceiling + own volume cap), Appetite
-> tracking.
+> tracking, and (v57) Buspirone/Paroxetine morning-linked-to-Protonix dosing with a "Morning meds"
+> Home card — **this one is also in production (`care-tracker`) as of its own v40**, everything
+> else above is testing-only.
 > Promote to prod by porting the relevant changes into `care-tracker`'s `index.html` with
 > `TEST_MODE = false` and a prod cache bump — **only when Aaron explicitly says to.**
 
@@ -15,7 +18,7 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 20, 2026
-> **Current version:** v56 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v57 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
@@ -147,7 +150,8 @@ Production's preferences collection. **This app must never write here.**
 | `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
 | `imodium` | Imodium | Daily limit 4 pills |
 | `protonix` | Protonix | Windows 8 AM–noon & 8–10 PM, missed-dose tracked |
-| `buspirone` / `paroxetine` / `iron` | — | Once daily, 10 PM window, missed-dose tracked |
+| `buspirone` / `paroxetine` | — | **Morning-linked to Protonix (v57, replaces the old 10 PM evening window).** `morningLinkedToProtonix: true`. Default window matches Protonix's own Morning window (8 AM–noon); once Protonix's actual morning dose is logged, shifts to 2h after that log time and stays open through end of day (`protonixMorningLogTs()` / `morningWindowsFor()`, mirroring the existing evening pattern). `groupedMorning: true` — rendered in the shared "Morning meds" Home card, not its own Quick Log card. Missed-dose tracked |
+| `iron` | — | Evening-linked to Protonix (unchanged) — default 10 PM window, shifts to 2h after Protonix's actual evening log if later. `groupedEvening: true` — shared "Evening meds" card (now just Iron + Compazine as of v57). Missed-dose tracked |
 | `senokot` | Senokot | As-needed, 8 AM & 10 PM windows |
 
 ### Medication Management (v35)
@@ -539,6 +543,55 @@ were corrupted and a cache reset understandably did nothing).
 See TESTING_README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v57 — July 20, 2026
+
+**Batch of 6 changes from Aaron: morning-linked Buspirone/Paroxetine (top priority, both apps),
+card-text fixes, medication editor clarity, Cycle/Journal separation, and Symptoms dropdown
+cleanup.**
+
+1. **Buspirone/Paroxetine moved from the 10 PM evening window to a new Morning window linked to
+   Protonix.** New `morningLinkedToProtonix` flag + `protonixMorningLogTs(d0)` /
+   `morningWindowsFor(med, d0)` functions, mirroring the pre-existing `eveningLinkedToProtonix` /
+   `eveningWindowsFor()` pattern exactly: default window is 8 AM–noon (matching Protonix's own
+   Morning window); once Protonix's actual morning dose is logged, the window shifts to 2 hours
+   after that real log time and stays open through end of day. `DEFAULT_MORNING_IDS = ['buspirone',
+   'paroxetine']` (new, parallel to `DEFAULT_EVENING_IDS`, which is now just `['iron', 'compazine']`).
+   A new shared `renderGroupedMedsCard(title, meds, now)` helper (refactored out of the old inline
+   Evening-meds card block) now powers both a new "Morning meds" Home card and the existing "Evening
+   meds" card, each with their own "Take all (N)" button. Also fixed a real bug this surfaced: the
+   local notification scheduler (`checkNotifications()`) still had Buspirone/Paroxetine wired into
+   the 8 PM "Evening Meds Due" reminder and had no entry for them in the 8:30 AM "Morning Meds Due"
+   check — moved accordingly (this function is a no-op in testing since `TEST_MODE` short-circuits
+   it at the top, but the fix matters for the production port, which doesn't have that gate).
+   **This piece was explicitly requested for both apps** — see the production side's own v40 entry
+   in `care-tracker`'s `CARETRACKER_HANDOFF.md` for the parallel port (scoped to just this change,
+   not the rest of this batch).
+2. **Fixed redundant Evening/Morning meds card status text** — a locked med's row was showing both
+   its full rule text ("10 PM or 2h after Protonix") and a separate "Opens 10 PM" badge saying the
+   same thing twice.
+3. **Chemo Schedule card resized** to the compact padding (`10px 11px`)/border-radius (`16px`)
+   convention already used by every other Home card (was `16px 17px`/`18px`), with a
+   `flexDirection:'column'` layout and shorter (38px vs 52px) input/button heights.
+4. **`cycle_start`/`cycle_end` entries removed from Today's Journal and Reports → History** — added
+   to both filters alongside the existing `inpatient*` exclusion. Reports → Cycle History
+   (`cyclePeriods()`, reads `state.entries` directly) is unaffected and remains the sole place period
+   start/end shows.
+5. **Medication editor clarity pass** (Aaron: "I think when adding meds, it should be an input so the
+   user knows exactly what to answer"): "Show in Home quick log" → "Show as its own Home card"; the
+   "Home quick log" manager badge → "Own Home card" / "Managed only" → "Managed only (no Home card)";
+   the "Chemo plan" badge (previously read-only, no way to set it in the UI) is now a real
+   `renderPillToggle` labeled "Chemo-day only"; new "Group with morning meds" toggle added alongside
+   the existing "Group with evening meds" one. Every toggle now has explicit helper text.
+6. **Symptoms dropdown redesign** — `SYMPTOM_TYPES` keeps legacy `diarrhea`/`constipation` entries
+   for backward-compatible display of old logged entries, but they're removed from the `<select>`
+   options; the diarrhea-only "Frequency (episodes)" picker is removed entirely (unreachable now); a
+   new `other: 'Other'` option was added. `logSymptom()` simplified (no more `freq` param or the
+   diarrhea/constipation auto-bowel-sync branch). Submission now requires a non-empty note when
+   `symptomType === 'other'`, replacing the old frequency-required-for-diarrhea validation.
+
+QA'd with a new 28/28 mocked-Firestore suite (`test_v57_batch.js`) covering all six items, plus a
+full regression pass across every existing suite (100/100) — **128/128 total.**
 
 ### v56 — July 20, 2026
 

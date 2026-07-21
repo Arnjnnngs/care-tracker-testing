@@ -131,11 +131,11 @@ const DEFAULT_MEDS = [
     doses:[{label:'Apply',pills:1,mg:0}] },
   { id:'protonix', name:'Protonix', sub:'Pantoprazole', type:'win', alerts:true, note:'Twice daily · 8 AM & 8 PM',
     windows:[{start:8,end:12,name:'Morning'},{start:20,end:22,name:'Evening'}] },
-  { id:'buspirone', name:'Buspirone', sub:'BuSpar', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
-    windows:[{start:22,end:24,name:'Night'}] },
-  { id:'paroxetine', name:'Paroxetine', sub:'Paxil', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
-    windows:[{start:22,end:24,name:'Night'}] },
-  { id:'iron', name:'Iron', sub:'Ferrous sulfate', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · 10 PM (or 2h after Protonix)',
+  { id:'buspirone', name:'Buspirone', sub:'BuSpar', type:'win', alerts:true, morningLinkedToProtonix:true, note:'Once daily · with Protonix',
+    windows:[{start:8,end:12,name:'Morning'}] },
+  { id:'paroxetine', name:'Paroxetine', sub:'Paxil', type:'win', alerts:true, morningLinkedToProtonix:true, note:'Once daily · with Protonix',
+    windows:[{start:8,end:12,name:'Morning'}] },
+  { id:'iron', name:'Iron', sub:'Ferrous sulfate', type:'win', alerts:true, eveningLinkedToProtonix:true, note:'Once daily · with Protonix',
     windows:[{start:22,end:24,name:'Night'}] },
   { id:'senokot', name:'Senokot', sub:'Senna', type:'gap', gapH:0, note:'As needed · 1–2 pills',
     doses:[{label:'1 pill',pills:1,mg:0},{label:'2 pills',pills:2,mg:0}] },
@@ -147,7 +147,8 @@ const DEFAULT_MEDS = [
 // Dose-entry history remains in Firestore; configuration changes do not create a new collection.
 const MED_CONFIG_STORAGE_KEY = 'caretracker-testing-medication-config-v1';
 const DEFAULT_QUICK_LOG_IDS = ['dexamethasone', 'tylenol', 'tylenol-liquid', 'zofran', 'morphine', 'lidocaine', 'protonix', 'senokot', 'imodium'];
-const DEFAULT_EVENING_IDS = ['buspirone', 'paroxetine', 'iron', 'compazine'];
+const DEFAULT_EVENING_IDS = ['iron', 'compazine'];
+const DEFAULT_MORNING_IDS = ['buspirone', 'paroxetine'];
 
 function deepCopyMeds(meds) {
   return meds.map(med => ({
@@ -184,7 +185,8 @@ function normalizeMedication(raw, index) {
     type,
     gapH: type === 'gap' ? Math.max(0, Number(original.gapH) || 0) : 0,
     quickLog: typeof original.quickLog === 'boolean' ? original.quickLog : DEFAULT_QUICK_LOG_IDS.includes(id),
-    groupedEvening: typeof original.groupedEvening === 'boolean' ? original.groupedEvening : DEFAULT_EVENING_IDS.includes(id)
+    groupedEvening: typeof original.groupedEvening === 'boolean' ? original.groupedEvening : DEFAULT_EVENING_IDS.includes(id),
+    groupedMorning: typeof original.groupedMorning === 'boolean' ? original.groupedMorning : DEFAULT_MORNING_IDS.includes(id)
   };
   if (doses && doses.length) medication.doses = doses; else delete medication.doses;
   if (type === 'win') medication.windows = windows.length ? windows : [{ start: 0, end: 24, name: 'Daily' }]; else delete medication.windows;
@@ -454,8 +456,8 @@ function protonixEveningLogTs(d0) {
   return entry ? entry.ts : null;
 }
 
-// Buspirone/Paroxetine/Iron open at 10 PM by default, but if Protonix's evening dose was
-// logged, they instead open 2 hours after that actual log time (so the two are spaced out).
+// Iron (and Compazine's own routine, unlinked) open at 10 PM by default, but if Protonix's evening
+// dose was logged, Iron instead opens 2 hours after that actual log time (so the two are spaced out).
 function eveningWindowsFor(med, d0) {
   const pTs = protonixEveningLogTs(d0);
   if (pTs) {
@@ -463,6 +465,26 @@ function eveningWindowsFor(med, d0) {
     if (startH < 24) return [{ start: Math.max(0, startH), end: 24, name: 'Night' }];
   }
   return med.windows; // default: 10 PM
+}
+
+// Protonix's morning (AM) dose log time for the given day, if logged yet — any entry logged
+// before its own Evening window opens (noon).
+function protonixMorningLogTs(d0) {
+  const es = entriesFor('protonix');
+  const entry = es.find(e => e.ts >= d0 && e.ts < d0 + 12 * 3600000);
+  return entry ? entry.ts : null;
+}
+
+// Buspirone/Paroxetine open in Protonix's own Morning window (8 AM–noon) by default, but if
+// Protonix's morning dose was logged, they instead open 2 hours after that actual log time and
+// stay open through end of day (mirrors eveningWindowsFor's pattern for the evening-linked meds).
+function morningWindowsFor(med, d0) {
+  const pTs = protonixMorningLogTs(d0);
+  if (pTs) {
+    const startH = (pTs + 2 * 3600000 - d0) / 3600000;
+    if (startH < 24) return [{ start: Math.max(0, startH), end: 24, name: 'Morning' }];
+  }
+  return med.windows; // default: 8 AM–noon (matches Protonix's own Morning window)
 }
 
 function status(med) {
@@ -502,7 +524,7 @@ function status(med) {
     return { locked: now < at, availableAt: at };
   }
   const d0 = dayStart(now), atH = (h) => d0 + h * 3600000;
-  const windows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0)) : med.eveningLinkedToProtonix ? eveningWindowsFor(med, d0) : med.windows;
+  const windows = med.id === 'dexamethasone' ? dexWindowsForOffset(chemoOffsetFor(d0)) : med.eveningLinkedToProtonix ? eveningWindowsFor(med, d0) : med.morningLinkedToProtonix ? morningWindowsFor(med, d0) : med.windows;
   for (const w of windows) {
     const ws = atH(w.start), we = atH(w.end);
     const used = es.some(e => e.ts >= ws && e.ts < we);
@@ -657,11 +679,11 @@ async function confirmTimeAndLog() {
     setToast(m.label + ' logged for ' + new Date(ts).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + fmtTime(ts));
   } else if (m.type === 'symptom') {
     if (!m.symptomType) { setToast('Select a symptom first'); return; }
-    if (m.symptomType === 'diarrhea' && !m.freq) { setToast('Select a frequency for diarrhea'); return; }
+    if (m.symptomType === 'other' && !(m.note || '').trim()) { setToast('Describe the symptom before saving'); return; }
     const editId = m.editId;
     setState({ timeModal: null });
     if (editId) await removeEntryDB(editId);
-    await logSymptom(m.symptomType, ts, { freq: m.freq, note: (m.note || '').trim() });
+    await logSymptom(m.symptomType, ts, { note: (m.note || '').trim() });
     setToast((SYMPTOM_TYPES[m.symptomType] || m.symptomType) + (editId ? ' updated' : ' logged') + ' at ' + fmtTime(ts));
   }
 }
@@ -887,21 +909,17 @@ async function submitAppetite(dayStartTs) {
 }
 
 // ---- Symptoms tracking ----
-// Ad hoc, timestamped incident notes (not a daily rollup) — Nausea, Vomiting, Diarrhea,
-// Constipation, fully editable/deletable, no 48h lock. Logging Diarrhea or Constipation also
-// starts (never ends) the shared Bowel Movement issue tracker above, for that entry's day, if
-// that day doesn't already have its own retrospective answer.
-const SYMPTOM_TYPES = { nausea: 'Nausea', vomiting: 'Vomiting', diarrhea: 'Diarrhea', constipation: 'Constipation' };
+// Ad hoc, timestamped incident notes (not a daily rollup) — Nausea, Vomiting, Other (free-text via
+// the Note field), fully editable/deletable, no 48h lock. Diarrhea and Constipation were removed as
+// selectable options here (v57) since they're already tracked properly via the dedicated Bowel
+// Movement Home alert/history — having both created confusing duplicate entry points for the same
+// thing. 'diarrhea'/'constipation' remain in SYMPTOM_TYPES/SYMPTOM_COLORS below purely so any
+// pre-existing logged entries of those types still display correctly in history.
+const SYMPTOM_TYPES = { nausea: 'Nausea', vomiting: 'Vomiting', other: 'Other', diarrhea: 'Diarrhea', constipation: 'Constipation' };
 function symptomEntries() { return state.entries.filter(e => e.medId && e.medId.indexOf('symptom_') === 0).sort((a, b) => b.ts - a.ts); }
 async function logSymptom(type, ts, opts) {
-  const freq = opts && opts.freq;
-  const entry = { medId: 'symptom_' + type, symptomType: type, ts, note: (opts && opts.note) || '', dose: freq ? (freq + ' episode' + (freq === '1' ? '' : 's')) : null, mg: 0 };
-  if (freq) entry.freq = freq;
+  const entry = { medId: 'symptom_' + type, symptomType: type, ts, note: (opts && opts.note) || '', dose: null, mg: 0 };
   await addEntryDB(entry);
-  if (type === 'diarrhea' || type === 'constipation') {
-    const d0 = dayStart(ts);
-    if (!bowelMovementFor(d0)) await logBowelMovement(type === 'diarrhea' ? 'diarrhea' : 'none', d0);
-  }
 }
 // Opens the shared time modal in 'symptom' mode. Pass an existing entry to edit it in place
 // (edits are implemented as remove-old + add-new, same pattern used elsewhere in the app).
@@ -1115,6 +1133,56 @@ function renderBottomNav() {
   );
 }
 
+// Shared renderer for a "grouped" meds card (Evening meds, Morning meds) — a set of `type:'win'`
+// meds presented together in one card with a "Take all" button when 2+ are currently open, instead
+// of scattering them across the individual Quick Log cards. Used for the Protonix-linked meds
+// (Buspirone/Paroxetine in the morning, Iron/Compazine in the evening).
+function renderGroupedMedsCard(title, meds, now) {
+  const inpatientNow = isInpatientActiveNow();
+  const dueMeds = meds.filter(m => { const s = status(m); return !s.locked; });
+  return h('section', null,
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' } },
+      h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479' } }, title),
+      (dueMeds.length >= 2 && !inpatientNow) ? h('button', { onClick: () => setState({ timeModal: { type: 'multi', medIds: dueMeds.map(m => m.id), timeValue: nowLocalISO() } }), style: { minHeight: '40px', padding: '0 16px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, 'Take all (' + dueMeds.length + ')') : null
+    ),
+    h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', overflow: 'hidden', marginTop: '11px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+      ...meds.map((med, i) => {
+        if (inpatientNow) {
+          return h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 15px', borderTop: i > 0 ? '1px solid rgba(212,104,138,0.08)' : 'none' } },
+            h('div', { style: { flex: '1', minWidth: '0' } },
+              h('div', { style: { fontSize: '15.5px', fontWeight: '800', letterSpacing: '-0.01em', color: '#9A6419' } }, med.name + ' - In-Patient (Restricted)'),
+              h('div', { style: { fontSize: '12px', color: '#7A5313' } }, 'Given by hospital staff')
+            )
+          );
+        }
+        const st = status(med);
+        const todayLogs = entriesFor(med.id).filter(e => e.ts >= dayStart(now));
+        const lastToday = todayLogs[todayLogs.length - 1];
+        const isOv = !!(state.override && state.override.medId === med.id);
+        let right;
+        if (isOv) {
+          right = h('div', { style: { display: 'flex', gap: '7px', flexShrink: '0' } },
+            h('button', { onClick: () => logMed(med.id, med.doses ? med.doses[0] : null, { force: true }), style: { minHeight: '42px', padding: '0 13px', borderRadius: '11px', background: '#C0453B', color: '#fff', fontSize: '13px', fontWeight: '700' } }, 'Log early'),
+            h('button', { onClick: () => setState({ override: null }), style: { minHeight: '42px', padding: '0 11px', borderRadius: '11px', background: 'rgba(255,255,255,0.5)', border: '1px solid rgba(212,104,138,0.15)', color: '#7D6974', fontSize: '13px', fontWeight: '600' } }, 'Cancel')
+          );
+        } else if (!st.locked) {
+          right = h('button', { onClick: () => logMed(med.id, med.doses ? med.doses[0] : null), style: { minHeight: '44px', padding: '0 20px', borderRadius: '12px', background: '#AA5375', color: '#fff', fontSize: '14px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)', flexShrink: '0' } }, 'Log');
+        } else {
+          right = h('button', { onClick: () => setState({ override: { medId: med.id } }), className: 'mono', style: { minHeight: '38px', padding: '0 12px', borderRadius: '99px', background: 'rgba(255,255,255,0.4)', border: '1px solid rgba(212,104,138,0.15)', color: '#5C6662', fontSize: '12.5px', fontWeight: '600', flexShrink: '0' } }, 'Opens ' + fmtTime(st.availableAt));
+        }
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 15px', borderTop: i > 0 ? '1px solid rgba(212,104,138,0.08)' : 'none' } },
+          h('div', { style: { flex: '1', minWidth: '0' } },
+            h('div', { style: { fontSize: '15.5px', fontWeight: '800', letterSpacing: '-0.01em' } }, med.name),
+            h('div', { style: { fontSize: '12px', color: '#7D6974' } }, med.sub + (med.note ? (' · ' + med.note) : '')),
+            lastToday ? h('div', { style: { fontSize: '12.5px', color: '#0C7F57', fontWeight: '700', marginTop: '2px' } }, '✓ Logged ' + fmtTime(lastToday.ts)) : null
+          ),
+          right
+        );
+      })
+    )
+  );
+}
+
 function renderContent(now, mg, pct, tyColor, ceiling) {
   if (state.view === 'meds') return renderMedicationManager(now);
   if (state.view === 'reports') return state.reportsView ? renderReportDetail(state.reportsView, now) : renderReportsMenu(now);
@@ -1181,23 +1249,16 @@ function renderTimeModal() {
       h('div', { style: { fontSize: '16px', fontWeight: '800', marginBottom: '22px', textAlign: 'center', letterSpacing: '-0.01em' } }, title),
       m.type === 'symptom' ? h('div', { style: { marginBottom: '16px' } },
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Symptom'),
-        h('select', { value: m.symptomType || '', onChange: (e) => { state.timeModal.symptomType = e.target.value; if (e.target.value !== 'diarrhea') state.timeModal.freq = null; setState({ timeModal: state.timeModal }); }, className: 'mono', style: { width: '100%', minHeight: '52px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+        h('select', { value: m.symptomType || '', onChange: (e) => { state.timeModal.symptomType = e.target.value; setState({ timeModal: state.timeModal }); }, className: 'mono', style: { width: '100%', minHeight: '52px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
           h('option', { value: '' }, 'Select...'),
           h('option', { value: 'nausea' }, 'Nausea'),
           h('option', { value: 'vomiting' }, 'Vomiting'),
-          h('option', { value: 'diarrhea' }, 'Diarrhea'),
-          h('option', { value: 'constipation' }, 'Constipation')
-        )
-      ) : null,
-      (m.type === 'symptom' && m.symptomType === 'diarrhea') ? h('div', { style: { marginBottom: '16px' } },
-        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Frequency (episodes)'),
-        h('div', { style: { display: 'flex', gap: '8px' } },
-          ...['1', '2', '3', '4+'].map(f => h('button', { onClick: () => { state.timeModal.freq = f; setState({ timeModal: state.timeModal }); }, style: { flex: '1', minHeight: '44px', borderRadius: '12px', border: m.freq === f ? '1px solid #AA5375' : '1px solid rgba(212,104,138,0.2)', background: m.freq === f ? '#AA5375' : 'rgba(255,255,255,0.6)', color: m.freq === f ? '#fff' : '#3D2B3A', fontSize: '14px', fontWeight: '700' } }, f))
+          h('option', { value: 'other' }, 'Other')
         )
       ) : null,
       m.type === 'symptom' ? h('div', { style: { marginBottom: '16px' } },
-        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Note (optional)'),
-        h('textarea', { value: m.note || '', onInput: (e) => { state.timeModal.note = e.target.value; }, rows: 3, placeholder: 'What was noticed, when, anything else...', style: { width: '100%', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '10px 14px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } })
+        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, m.symptomType === 'other' ? 'Describe it (required)' : 'Note (optional)'),
+        h('textarea', { value: m.note || '', onInput: (e) => { state.timeModal.note = e.target.value; }, rows: 3, placeholder: m.symptomType === 'other' ? 'What symptom, when, anything else...' : 'What was noticed, when, anything else...', style: { width: '100%', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '10px 14px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } })
       ) : null,
       h('div', null,
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Date & Time'),
@@ -1600,7 +1661,7 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     daysUntil === 1 ? new Date(dayStart(chemoTs)).toLocaleDateString([], { weekday: 'long', month: 'numeric', day: 'numeric' }) + ' · TOMORROW' :
     daysUntil === 0 ? 'TODAY' :
     'Last chemo ' + new Date(dayStart(chemoTs)).toLocaleDateString([], { weekday: 'long', month: 'numeric', day: 'numeric' });
-  parts.push(h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', padding: '16px 17px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+  parts.push(h('section', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', padding: '10px 11px', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 3px 14px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
     h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' } },
       h('div', null,
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8A6479' } }, 'Chemo schedule'),
@@ -1611,9 +1672,9 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         h('button', { onClick: () => setState({ confirmClearChemo: false }), style: { color: '#7D6974', fontSize: '12.5px', padding: '8px 6px', fontWeight: '600' } }, 'Keep')
       ) : h('button', { onClick: () => { setState({ confirmClearChemo: true }); setTimeout(() => { if (state.confirmClearChemo) setState({ confirmClearChemo: false }); }, 6000); }, style: { color: '#8A6479', fontSize: '12.5px', padding: '6px', fontWeight: '600' } }, 'Clear')) : null
     ),
-    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
-      h('input', { type: 'date', value: state.chemoInput, onInput: (e) => { state.chemoInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '52px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
-      h('button', { onClick: setChemoDate, style: { flexShrink: '0', minHeight: '52px', padding: '0 18px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700' } }, chemoTs ? 'Update' : 'Set date')
+    h('div', { style: { display: 'flex', gap: '6px' } },
+      h('input', { type: 'date', value: state.chemoInput, onInput: (e) => { state.chemoInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 12px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
+      h('button', { onClick: setChemoDate, style: { flexShrink: '0', minHeight: '38px', padding: '0 14px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13px', fontWeight: '700' } }, chemoTs ? 'Update' : 'Set date')
     )
   ));
 
@@ -1726,54 +1787,17 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
     quickLogOpen ? h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '8px', marginTop: '8px' } }, ...medCards) : null
   ));
 
-  // Evening meds — one grouped card (Buspirone, Paroxetine, Iron, Compazine)
-  const schedMeds = state.meds.filter(med => med.groupedEvening);
-  const dueMeds = schedMeds.filter(m => { const s = status(m); return !s.locked; });
-  parts.push(h('section', null,
-    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' } },
-      h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A6479' } }, 'Evening meds'),
-      (dueMeds.length >= 2 && !inpatientActiveNow) ? h('button', { onClick: () => setState({ timeModal: { type: 'multi', medIds: dueMeds.map(m => m.id), timeValue: nowLocalISO() } }), style: { minHeight: '40px', padding: '0 16px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13.5px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, 'Take all (' + dueMeds.length + ')') : null
-    ),
-    h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '18px', overflow: 'hidden', marginTop: '11px', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
-      ...schedMeds.map((med, i) => {
-        if (inpatientActiveNow) {
-          return h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 15px', borderTop: i > 0 ? '1px solid rgba(212,104,138,0.08)' : 'none' } },
-            h('div', { style: { flex: '1', minWidth: '0' } },
-              h('div', { style: { fontSize: '15.5px', fontWeight: '800', letterSpacing: '-0.01em', color: '#9A6419' } }, med.name + ' - In-Patient (Restricted)'),
-              h('div', { style: { fontSize: '12px', color: '#7A5313' } }, 'Given by hospital staff')
-            )
-          );
-        }
-        const st = status(med);
-        const todayLogs = entriesFor(med.id).filter(e => e.ts >= dayStart(now));
-        const lastToday = todayLogs[todayLogs.length - 1];
-        const isOv = !!(state.override && state.override.medId === med.id);
-        let right;
-        if (isOv) {
-          right = h('div', { style: { display: 'flex', gap: '7px', flexShrink: '0' } },
-            h('button', { onClick: () => logMed(med.id, med.doses ? med.doses[0] : null, { force: true }), style: { minHeight: '42px', padding: '0 13px', borderRadius: '11px', background: '#C0453B', color: '#fff', fontSize: '13px', fontWeight: '700' } }, 'Log early'),
-            h('button', { onClick: () => setState({ override: null }), style: { minHeight: '42px', padding: '0 11px', borderRadius: '11px', background: 'rgba(255,255,255,0.5)', border: '1px solid rgba(212,104,138,0.15)', color: '#7D6974', fontSize: '13px', fontWeight: '600' } }, 'Cancel')
-          );
-        } else if (!st.locked) {
-          right = h('button', { onClick: () => logMed(med.id, med.doses ? med.doses[0] : null), style: { minHeight: '44px', padding: '0 20px', borderRadius: '12px', background: '#AA5375', color: '#fff', fontSize: '14px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)', flexShrink: '0' } }, 'Log');
-        } else {
-          right = h('button', { onClick: () => setState({ override: { medId: med.id } }), className: 'mono', style: { minHeight: '38px', padding: '0 12px', borderRadius: '99px', background: 'rgba(255,255,255,0.4)', border: '1px solid rgba(212,104,138,0.15)', color: '#5C6662', fontSize: '12.5px', fontWeight: '600', flexShrink: '0' } }, 'Opens ' + fmtTime(st.availableAt));
-        }
-        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 15px', borderTop: i > 0 ? '1px solid rgba(212,104,138,0.08)' : 'none' } },
-          h('div', { style: { flex: '1', minWidth: '0' } },
-            h('div', { style: { fontSize: '15.5px', fontWeight: '800', letterSpacing: '-0.01em' } }, med.name),
-            h('div', { style: { fontSize: '12px', color: '#7D6974' } }, med.sub + ' · ' + med.note),
-            lastToday ? h('div', { style: { fontSize: '12.5px', color: '#0C7F57', fontWeight: '700', marginTop: '2px' } }, '✓ Logged ' + fmtTime(lastToday.ts)) : null
-          ),
-          right
-        );
-      })
-    )
-  ));
+  // Morning meds — grouped card (Buspirone, Paroxetine — 2h after Protonix's morning dose)
+  const morningMeds = state.meds.filter(med => med.groupedMorning);
+  if (morningMeds.length) parts.push(renderGroupedMedsCard('Morning meds', morningMeds, now));
+
+  // Evening meds — grouped card (Iron, Compazine — Iron 2h after Protonix's evening dose)
+  const eveningMeds = state.meds.filter(med => med.groupedEvening);
+  if (eveningMeds.length) parts.push(renderGroupedMedsCard('Evening meds', eveningMeds, now));
 
   // Today's journal
   const d0 = dayStart(now);
-  const todayEntries = state.entries.filter(e => e.ts >= d0 && e.medId !== 'inpatient' && e.medId !== 'inpatient_start' && e.medId !== 'inpatient_end').slice().sort((a, b) => a.ts - b.ts);
+  const todayEntries = state.entries.filter(e => e.ts >= d0 && e.medId !== 'inpatient' && e.medId !== 'inpatient_start' && e.medId !== 'inpatient_end' && e.medId !== 'cycle_start' && e.medId !== 'cycle_end').slice().sort((a, b) => a.ts - b.ts);
   const bucket = timeBucket;
   const tmap = {};
   const missedTodayForJournal = missedDosesFor(now, now);
@@ -1852,7 +1876,9 @@ function medicationFormFrom(med) {
     dailyLimit: max || '',
     dailyLimitUnit: base.ceilingUnit || 'mg',
     quickLog: typeof base.quickLog === 'boolean' ? base.quickLog : true,
-    groupedEvening: !!base.groupedEvening
+    groupedEvening: !!base.groupedEvening,
+    groupedMorning: !!base.groupedMorning,
+    chemoOnly: !!base.chemoOnly
   };
 }
 
@@ -1924,6 +1950,8 @@ function saveMedicationEditor() {
     windows,
     quickLog: !!form.quickLog,
     groupedEvening: !!form.groupedEvening,
+    groupedMorning: !!form.groupedMorning,
+    chemoOnly: !!form.chemoOnly,
     ceiling: dailyLimit > 0,
     ceilingMax: dailyLimit || undefined,
     ceilingUnit: form.dailyLimitUnit === 'mg' ? undefined : form.dailyLimitUnit
@@ -1998,8 +2026,10 @@ function renderMedicationEditor() {
       h('label', { style: { gridColumn: '1 / -1' } }, fieldLabel('Frequency / rule note'), h('textarea', { placeholder: 'For example: Min 4-hour gap or Once nightly', onInput: event => updateMedicationForm('note', event.target.value), style: { width: '100%', minHeight: '72px', resize: 'vertical', border: '1px solid rgba(212,104,138,0.22)', borderRadius: '11px', padding: '10px 11px', fontFamily: 'inherit', fontSize: '13px', lineHeight: '1.35', background: 'rgba(255,255,255,0.72)', color: '#342530' } }, form.note))
     ),
     h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '8px', marginTop: '12px' } },
-      renderPillToggle('Show in Home quick log', !!form.quickLog, () => toggleMedicationForm('quickLog'), 'Places this medication among the compact Home cards.'),
-      renderPillToggle('Group with evening meds', !!form.groupedEvening, () => toggleMedicationForm('groupedEvening'), 'Includes it in the Home evening-med group.')
+      renderPillToggle('Show as its own Home card', !!form.quickLog, () => toggleMedicationForm('quickLog'), 'Gives this medication its own compact card in the Quick Log section on Home.'),
+      renderPillToggle('Group with morning meds', !!form.groupedMorning, () => toggleMedicationForm('groupedMorning'), 'Lists it in the shared "Morning meds" card instead of its own Quick Log card — for meds taken alongside Protonix in the morning.'),
+      renderPillToggle('Group with evening meds', !!form.groupedEvening, () => toggleMedicationForm('groupedEvening'), 'Lists it in the shared "Evening meds" card instead of its own Quick Log card — for meds taken alongside Protonix at night.'),
+      renderPillToggle('Chemo-day only', !!form.chemoOnly, () => toggleMedicationForm('chemoOnly'), 'Only appears on Home during the chemo-adjacent day window (day before through day after chemo) — hidden the rest of the time.')
     ),
     h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '15px' } },
       h('button', { onClick: () => setState({ medEditor: null }), style: { minHeight: '42px', padding: '0 14px', borderRadius: '11px', background: 'rgba(255,255,255,0.65)', border: '1px solid rgba(212,104,138,0.18)', color: '#6E5261', fontSize: '13px', fontWeight: '800' } }, 'Discard'),
@@ -2028,9 +2058,10 @@ function renderMedicationManager(now) {
         med.note ? h('div', { style: { color: '#745D69' } }, med.note) : null
       ),
       h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '10px' } },
-        med.quickLog ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(170,83,117,0.11)', color: '#8E3D61', fontSize: '10px', fontWeight: '800' } }, 'Home quick log') : h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(125,105,116,0.10)', color: '#705B66', fontSize: '10px', fontWeight: '800' } }, 'Managed only'),
+        med.quickLog ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(170,83,117,0.11)', color: '#8E3D61', fontSize: '10px', fontWeight: '800' } }, 'Own Home card') : h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(125,105,116,0.10)', color: '#705B66', fontSize: '10px', fontWeight: '800' } }, 'Managed only (no Home card)'),
+        med.groupedMorning ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(155,91,138,0.12)', color: '#7B3F6B', fontSize: '10px', fontWeight: '800' } }, 'Morning group') : null,
         med.groupedEvening ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(155,91,138,0.12)', color: '#7B3F6B', fontSize: '10px', fontWeight: '800' } }, 'Evening group') : null,
-        med.chemoOnly ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(192,69,59,0.10)', color: '#A15B56', fontSize: '10px', fontWeight: '800' } }, 'Chemo plan') : null
+        med.chemoOnly ? h('span', { style: { borderRadius: '99px', padding: '3px 7px', background: 'rgba(192,69,59,0.10)', color: '#A15B56', fontSize: '10px', fontWeight: '800' } }, 'Chemo-day only') : null
       ),
       deleting ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', paddingTop: '9px', borderTop: '1px solid rgba(192,69,59,0.16)' } },
         h('span', { style: { flex: '1', fontSize: '11px', color: '#A15B56', fontWeight: '700', lineHeight: '1.35' } }, 'Existing dose history will remain visible.'),
@@ -2115,7 +2146,7 @@ function renderHistory(now) {
   const d0 = dayStart(now);
   const yStart = d0 - 86400000;
   const dmap = {};
-  state.entries.forEach(e => { if (e.medId === 'inpatient' || e.medId === 'inpatient_start' || e.medId === 'inpatient_end') return; const k = dayStart(e.ts); (dmap[k] = dmap[k] || []).push(e); });
+  state.entries.forEach(e => { if (e.medId === 'inpatient' || e.medId === 'inpatient_start' || e.medId === 'inpatient_end' || e.medId === 'cycle_start' || e.medId === 'cycle_end') return; const k = dayStart(e.ts); (dmap[k] = dmap[k] || []).push(e); });
 
   const historyDays = Object.keys(dmap).map(k => +k).sort((a, b) => b - a).map(k => {
     const missed = missedDosesFor(k, now);
@@ -2546,7 +2577,7 @@ function checkNotifications() {
   // 8:00 PM reminder (20:00) - evening meds
   // Fire between 8:00 PM and 8:05 PM
   if (h === 20 && m < 5 && !notifSentToday['sched-8pm']) {
-    const eveningMeds = ['protonix', 'iron', 'buspirone', 'paroxetine', 'compazine'];
+    const eveningMeds = ['protonix', 'iron', 'compazine'];
     const due = [];
     const d0 = dayStart(nowTs);
     eveningMeds.forEach(medId => {
@@ -2593,6 +2624,12 @@ function checkNotifications() {
         if (!taken) morningMeds.push('Protonix');
       }
     }
+    ['buspirone', 'paroxetine'].forEach(medId => {
+      const med = state.meds.find(x => x.id === medId);
+      if (!med) return;
+      const st = status(med);
+      if (!st.locked) morningMeds.push(med.name);
+    });
     if (morningMeds.length > 0) {
       sendNotif('Morning Meds Due', morningMeds.join(', ') + ' — time for morning doses', 'morning-830am');
     }
