@@ -150,7 +150,7 @@ Production's preferences collection. **This app must never write here.**
 | `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
 | `imodium` | Imodium | Daily limit 4 pills |
 | `protonix` | Protonix | Windows 8 AM–noon & 8–10 PM, missed-dose tracked |
-| `buspirone` / `paroxetine` | — | **Morning-linked to Protonix (v57, replaces the old 10 PM evening window).** `morningLinkedToProtonix: true`. Default window matches Protonix's own Morning window (8 AM–noon); once Protonix's actual morning dose is logged, shifts to 2h after that log time and stays open through end of day (`protonixMorningLogTs()` / `morningWindowsFor()`, mirroring the existing evening pattern). `groupedMorning: true` — rendered in the shared "Morning meds" Home card, not its own Quick Log card. Missed-dose tracked |
+| `buspirone` / `paroxetine` | — | **Morning-linked to Protonix (v57, replaces the old 10 PM evening window; default corrected in v58).** `morningLinkedToProtonix: true`. Default window is a fixed 10 AM–midnight (Protonix's own typical 8 AM dose time + 2h — mirrors Iron's 10 PM default exactly); once Protonix's actual morning dose is logged, shifts to 2h after that log time and stays open through end of day (`protonixMorningLogTs()` / `morningWindowsFor()`, mirroring the existing evening pattern). `groupedMorning: true` — rendered in the shared "Morning meds" Home card, not its own Quick Log card. Missed-dose tracked |
 | `iron` | — | Evening-linked to Protonix (unchanged) — default 10 PM window, shifts to 2h after Protonix's actual evening log if later. `groupedEvening: true` — shared "Evening meds" card (now just Iron + Compazine as of v57). Missed-dose tracked |
 | `senokot` | Senokot | As-needed, 8 AM & 10 PM windows |
 
@@ -543,6 +543,30 @@ were corrupted and a cache reset understandably did nothing).
 See TESTING_README.md's **Testing Version History** table for the authoritative, dated list (this repo uses
 `vN` numbers matching production's scheme, offset one ahead while testing leads — not an independent
 counter). **v38–v49 have not yet been individually documented there — see Known Issues #2.**
+
+### v58 — July 20, 2026
+
+**Correction to v57's Buspirone/Paroxetine default window, per Aaron's direct feedback.**
+
+Aaron's original request ("2 hours + protonix log date, like the evening") was implemented in v57 as
+"default window matches Protonix's own 8 AM–noon window" — this was a misreading. Aaron's exact
+follow-up clarified the intended design: Protonix itself fires at a fixed 8 AM; Buspirone/Paroxetine
+should open at 2 hours after Protonix's *actual logged* time, but if Protonix hasn't been logged yet,
+the fallback default should be a single fixed clock time — **10 AM**, i.e. Protonix's typical 8 AM
+dose time + 2h — not the 8 AM–noon range. This is exactly how Iron's evening default (10 PM) already
+works: it's Protonix's typical 8 PM evening dose time + 2h, not "matches Protonix's 8–10 PM window."
+
+- `DEFAULT_MEDS` buspirone/paroxetine `windows` changed from `[{start:8,end:12,name:'Morning'}]` to
+  `[{start:10,end:24,name:'Morning'}]` — mirrors Iron's `{start:22,end:24,name:'Night'}` exactly.
+- `morningWindowsFor(med, d0)` comment corrected to describe the 10 AM default; the shift-after-actual-
+  log behavior is unchanged (still `pTs + 2h` through end of day).
+- `checkNotifications()`: the Buspirone/Paroxetine check moved out of the fixed 8:30 AM block (where
+  it incorrectly lived alongside Protonix's own reminder) into a new fixed 9:55–10:05 AM block keyed
+  `notifSentToday['sched-10am']`, matching the corrected 10 AM default. (This function is dead code in
+  testing since `TEST_MODE` short-circuits it, but keeping it correct matters for future production
+  parity — see the production v41 entry in `care-tracker`'s `CARETRACKER_HANDOFF.md`.)
+- QA: `test_v57_batch.js` updated (checks 3–5 rewritten for the 10 AM default) and re-run — 28/28,
+  plus a full regression pass across all existing suites — 128/128 total.
 
 ### v57 — July 20, 2026
 
