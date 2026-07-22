@@ -399,7 +399,11 @@ function chemoOffsetFor(dayTs) {
   return Math.round((dayStart(dayTs) - dayStart(c)) / 86400000);
 }
 function dexActiveOn(dayTs) { const o = chemoOffsetFor(dayTs); return o !== null && o >= -1 && o <= 1; }
-function zofranBlockedOn(dayTs) { const o = chemoOffsetFor(dayTs); return o !== null && o >= 0 && o <= 1; }
+// Zofran is blocked for 3 days: chemo day itself plus the 2 days after (e.g. chemo Thursday ->
+// blocked Thu/Fri/Sat, opens Sunday). Confirmed by Aaron as the original, correct spec — v61/v62
+// of this file incorrectly "fixed" this to a 2-day block based on stale documentation elsewhere in
+// this repo; reverted in v67. See TESTING_README.md's v67 changelog entry.
+function zofranBlockedOn(dayTs) { const o = chemoOffsetFor(dayTs); return o !== null && o >= 0 && o <= 2; }
 function dexWindowsForOffset(offset) { return offset === 1 ? [{ start: 8, end: 12, name: 'Morning' }] : [{ start: 8, end: 12, name: 'Morning' }, { start: 14, end: 18, name: 'Afternoon' }]; }
 
 const MISSED_TRACK_SINCE = new Date(2026, 6, 12).getTime(); // Jul 12, 2026 — no retroactive flags before this
@@ -506,7 +510,8 @@ function morningWindowsFor(med, d0) {
 function status(med) {
   const now = state.now;
   if (med.id === 'zofran' && zofranBlockedOn(now)) {
-    return { locked: true, chemoBlock: true, availableAt: dayStart(nextChemoTs()) + 2 * 86400000 + 8 * 3600000 };
+    // 3-day block (chemo day + 2 following days, see zofranBlockedOn) — opens on day+3 at 8am.
+    return { locked: true, chemoBlock: true, availableAt: dayStart(nextChemoTs()) + 3 * 86400000 + 8 * 3600000 };
   }
   const es = entriesFor(med.id).slice().sort((a, b) => a.ts - b.ts);
   if (med.type === 'gap') {

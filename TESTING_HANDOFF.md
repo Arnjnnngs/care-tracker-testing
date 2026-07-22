@@ -18,17 +18,27 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 23, 2026
-> **Current version:** v66 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v67 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
+>
+> **Zofran chemo-block is a 3-day block — chemo day plus the 2 days after** (e.g. chemo Thursday ->
+> blocked Thu/Fri/Sat, opens Sunday 8 AM), confirmed directly by Aaron as the original, correct spec.
+> `zofranBlockedOn()` is `o >= 0 && o <= 2`. **This file and TESTING_README.md previously and
+> incorrectly said 2 days** (`o >= 0 && o <= 1`) — that documentation error led to a real regression
+> during the 30-use-case QA pass below (v61/v62 shipped a 2-day block "fix" against a wrong spec);
+> reverted in v67 once Aaron corrected the spec directly. **Production `care-tracker` was never
+> touched and was correct the entire time** — do not port anything Zofran-related from testing to
+> production based on the v61/v62 history below; those changes were wrong and are reverted.
 >
 > **30-use-case end-to-end QA pass (Jul 22–23, 2026): complete, all issues fixed, full re-test clean.**
 > Every feature was tested against a coherent multi-day patient-story dataset (still in Firestore,
 > not cleaned up per standing test-data rules) and checked against its *original documented spec* —
 > TESTING_README.md, this file, and the version-history changelog entries — not just "does it seem
-> to work." Six real bugs were found and fixed, each with a regression test and a full suite re-run:
-> - **v61/v62** — Zofran's chemo-day block was 3 days instead of the documented 2 (two-part fix, see
->   below). **Production has the identical original bug and has not been touched** — flagged to
->   Aaron separately for a production-only decision.
+> to work." Five real bugs were found and fixed, plus one false positive (v61/v62) that turned out to
+> be a documentation error on my part rather than a code bug, since reverted (v67):
+> - **v61/v62 (reverted in v67)** — misdiagnosed as a bug: this file and TESTING_README.md both said
+>   the Zofran block was 2 days, so the actual (correct) 3-day behavior was "fixed" to match the wrong
+>   documentation. Aaron corrected this directly — see the callout above. No production action needed.
 > - **v63** — Symptoms tab subtitle (and this file's own "App Views" section) still described
 >   Diarrhea/Constipation options that v57 had already removed.
 > - **v64** — `fmtDateLabel()` computed its "Today" baseline from real `Date.now()` instead of the
@@ -42,18 +52,11 @@
 >   another day" control) orphaned the earlier one as a permanently-"Active" row in Cycle/In-Patient
 >   History, with no way to fix it via the UI. Fixed `cyclePeriods()`/`inpatientPeriods()`; since both
 >   recompute from raw entries every render, this also self-corrected the pre-existing bad test data.
+> - **v67** — reverted v61/v62 (see above) and corrected the documentation that caused the mistake.
 >
 > A pre-existing, unrelated legacy test file, `test_bowel_symptoms.js`, was found to be broken/stale
 > (hangs, reads a hardcoded path unrelated to this repo) — out of scope for this pass, not fixed,
 > flagged here for a future cleanup decision.
->
-> **v61/v62 bug fix (found during a live 30-use-case QA pass):** `zofranBlockedOn()` was blocking 3 days
-> post-chemo (`o >= 0 && o <= 2`) instead of the documented 2 (`o >= 0 && o <= 1`, see below and
-> TESTING_README's "Chemo Cycle" section) — fixed in v61. v62 fixed a second, related bug the v61 pass
-> missed: `status()`'s displayed "Restricted — next dose" timestamp for Zofran had its own separately
-> hardcoded `chemo day + 3 days` offset that wasn't updated alongside `zofranBlockedOn()` — corrected to
-> `+ 2 days` to match. **Production has the original 3-day-block bug and has not been touched** —
-> flagged to Aaron separately.
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in TESTING_README.md at the time. See TESTING_README's table for a placeholder note
@@ -178,7 +181,7 @@ Production's preferences collection. **This app must never write here.**
 | `dexamethasone` | Dexamethasone | `chemoOnly: true` — only appears in Quick Log when `dexActiveOn(day)` (day −1 to +1 relative to chemo date). 2 tablets, 8 AM & 2 PM windows. Missed-dose tracked. |
 | `tylenol` | Tylenol | Daily max 2500 mg, 4h min gap, 500/1000 mg doses. **`painScale: true` (v29), required as of v30** — same 1–10 "Pain level" dropdown as Morphine; Confirm is blocked until a level is chosen. **`ceilingGroup: 'tylenol'` (v54)** — shares its 2500 mg daily ceiling with `tylenol-liquid` (see below) |
 | `tylenol-liquid` | Tylenol Liquid | Added v54. Oral suspension form, tracked as a fully separate medication (not folded into the `tylenol` card) so History/Reports never have to disambiguate "which Tylenol." 30 mL (1000 mg) per dose, its own independent 6h gap (does not interact with pill Tylenol's 4h gap), `painScale: true` + required (same as pill Tylenol). `ceilingGroup: 'tylenol'` — its mg total is pooled with pill Tylenol against the same 2500 mg/24h ceiling. `volumeCeilingMl: 90` + `volumePerDoseMl: 30` — a second, independent ceiling on its own 90 mL/24h, tracked only from this medication's own entries (pill Tylenol doses never count toward the volume total, and Liquid doses never count toward anything but the shared mg ceiling and its own volume ceiling) |
-| `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–1 via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
+| `zofran` | Zofran | **As-needed (v29): `gapH: 0`, no lock, no reminder.** Still blocked on chemo days 0–2 (3 days — chemo day plus the 2 days after) via `zofranBlockedOn()` — that's a clinical rule, independent of the gap timer, and was not removed |
 | `compazine` | Compazine | 6h min gap, shown in Evening meds card |
 | `morphine` | Morphine | **Rolling 4h / 15 mg ceiling (v56, replaces the old flat 4h gap)** — `ceiling:true, ceilingMax:15, rollingCeilingH:4`; ½ tab (7.5 mg) / full tab (15 mg) doses. Locks only once cumulative mg logged in the trailing 4 hours reaches 15 — see Section 6a below for the full model. **`painScale: true` (v29), required as of v30** — time modal shows a 1–10 "Pain level" dropdown; `Not recorded` (blank) is no longer a valid choice for Confirm, `confirmTimeAndLog()` rejects the submission otherwise. Stored as `entry.painLevel`, shown in Today's Journal and History next to the dose. Tylenol has the same field/requirement (see above) |
 | `lidocaine` | Lidocaine | 4h min gap, max 4 applications/day |
@@ -304,7 +307,7 @@ Weight card where it is persistent until answered."
 ### Chemo cycle
 - `nextChemoTs()` reads the most recently-set (`loggedAt`) `chemo_date` record; `ts: 0` means cleared.
 - `chemoOffsetFor(dayTs)` = days between a given day and the chemo date (negative = before).
-- `dexActiveOn(day)` = offset in `[-1, 1]`. `zofranBlockedOn(day)` = offset in `{0, 1}`.
+- `dexActiveOn(day)` = offset in `[-1, 1]`. `zofranBlockedOn(day)` = offset in `[0, 2]` (3-day block).
 - Home shows a phased red banner for offsets `[-2, 1]` and a "Chemo schedule" card to set/clear the date.
 
 ### Missed-dose alerts
@@ -559,7 +562,7 @@ were corrupted and a cache reset understandably did nothing).
    by a separate project. Don't touch project-level Firebase settings without checking prod impact.
 5. **Zofran's chemo-day block is independent of its (now-removed) gap timer** — don't assume
    `gapH: 0` means Zofran is unrestricted; `status()` checks `zofranBlockedOn()` before the gap logic
-   and still locks it (with override) on chemo days 0–1.
+   and still locks it (with override) on chemo days 0–2 (3 days).
 6. **`painLevel` is required for new Tylenol and Morphine entries** — `confirmTimeAndLog()` rejects a
    blank selection. Older test records from before v30 may not have a value, so history rendering must
    remain tolerant of it.
