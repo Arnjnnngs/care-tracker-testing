@@ -18,13 +18,16 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 22, 2026
-> **Current version:** v61 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v62 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
-> **v61 bug fix (found during a live 30-use-case QA pass):** `zofranBlockedOn()` was blocking 3 days
+> **v61/v62 bug fix (found during a live 30-use-case QA pass):** `zofranBlockedOn()` was blocking 3 days
 > post-chemo (`o >= 0 && o <= 2`) instead of the documented 2 (`o >= 0 && o <= 1`, see below and
-> TESTING_README's "Chemo Cycle" section). Fixed in testing; **production has the same bug and has
-> not been touched** — flagged to Aaron separately.
+> TESTING_README's "Chemo Cycle" section) — fixed in v61. v62 fixed a second, related bug the v61 pass
+> missed: `status()`'s displayed "Restricted — next dose" timestamp for Zofran had its own separately
+> hardcoded `chemo day + 3 days` offset that wasn't updated alongside `zofranBlockedOn()` — corrected to
+> `+ 2 days` to match. **Production has the original 3-day-block bug and has not been touched** —
+> flagged to Aaron separately.
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in TESTING_README.md at the time. See TESTING_README's table for a placeholder note

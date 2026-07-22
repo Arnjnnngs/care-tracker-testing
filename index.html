@@ -506,7 +506,7 @@ function morningWindowsFor(med, d0) {
 function status(med) {
   const now = state.now;
   if (med.id === 'zofran' && zofranBlockedOn(now)) {
-    return { locked: true, chemoBlock: true, availableAt: dayStart(nextChemoTs()) + 3 * 86400000 + 8 * 3600000 };
+    return { locked: true, chemoBlock: true, availableAt: dayStart(nextChemoTs()) + 2 * 86400000 + 8 * 3600000 };
   }
   const es = entriesFor(med.id).slice().sort((a, b) => a.ts - b.ts);
   if (med.type === 'gap') {
