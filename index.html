@@ -2793,7 +2793,22 @@ render();
 
 // Service worker registration
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    // Proactively check for a newer sw.js on every load instead of relying solely on the
+    // browser's own background update check, which can be slow/throttled and left this
+    // testing app running stale cached JS (with already-pushed bug fixes not applying) for
+    // multiple page loads during the 30-use-case QA pass — found while verifying UC11.
+    reg.update().catch(() => {});
+  }).catch(() => {});
+
+  // Once a new service worker activates and takes control, reload once so this tab picks up
+  // the new app shell immediately rather than continuing to run the JS it started with.
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    window.location.reload();
+  });
 }
 </script>
 </body>
