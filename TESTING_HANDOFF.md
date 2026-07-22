@@ -17,9 +17,14 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 20, 2026
-> **Current version:** v57 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Last updated:** July 22, 2026
+> **Current version:** v61 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
+>
+> **v61 bug fix (found during a live 30-use-case QA pass):** `zofranBlockedOn()` was blocking 3 days
+> post-chemo (`o >= 0 && o <= 2`) instead of the documented 2 (`o >= 0 && o <= 1`, see below and
+> TESTING_README's "Chemo Cycle" section). Fixed in testing; **production has the same bug and has
+> not been touched** — flagged to Aaron separately.
 >
 > **Known documentation gap:** versions v38–v49 (Jul 18–19, 2026) were built, QA'd, and pushed but
 > never got Version History rows in TESTING_README.md at the time. See TESTING_README's table for a placeholder note
