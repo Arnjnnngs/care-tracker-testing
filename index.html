@@ -215,16 +215,31 @@ function migrateSenokotV37(med) {
   return normalizeMedication(deepCopyMeds(DEFAULT_MEDS.filter(m => m.id === 'senokot'))[0]);
 }
 
+// A saved device config is a point-in-time snapshot of the FULL med list — it does not automatically
+// pick up medications added to DEFAULT_MEDS after that snapshot was taken (e.g. Tylenol Liquid, added
+// well after most devices had already saved a config from editing some other medication). Without this
+// merge, a brand-new default medication would silently never appear on any device with an existing
+// saved config, even though it renders fine on a fresh/no-saved-config session. Any DEFAULT_MEDS entry
+// whose id isn't already present in the saved list AND isn't archived (deliberately deleted) gets
+// appended, in DEFAULT_MEDS order at the end; existing customizations for meds already present are
+// left untouched.
+function mergeMissingDefaultMeds(meds, archivedMeds) {
+  const known = new Set(meds.map(m => m.id));
+  const archivedIds = new Set(Object.keys(archivedMeds || {}));
+  const missing = DEFAULT_MEDS.filter(m => !known.has(m.id) && !archivedIds.has(m.id));
+  if (!missing.length) return meds;
+  return meds.concat(deepCopyMeds(missing).map(normalizeMedication));
+}
+
 function loadMedicationConfig() {
   const fallback = defaultMedicationConfig();
   try {
     if (typeof localStorage === 'undefined') return fallback;
     const saved = JSON.parse(localStorage.getItem(MED_CONFIG_STORAGE_KEY));
     if (!saved || !Array.isArray(saved.meds) || !saved.meds.length) return fallback;
-    return {
-      meds: saved.meds.map(normalizeMedication).map(migrateSenokotV37),
-      archivedMeds: normalizeArchivedMeds(saved.archivedMeds)
-    };
+    const archivedMeds = normalizeArchivedMeds(saved.archivedMeds);
+    const meds = mergeMissingDefaultMeds(saved.meds.map(normalizeMedication).map(migrateSenokotV37), archivedMeds);
+    return { meds, archivedMeds };
   } catch (error) {
     console.warn('Medication configuration could not be loaded:', error);
     return fallback;
