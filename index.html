@@ -763,11 +763,24 @@ async function logCycleEnd() { await addEntryDB({ medId: 'cycle_end', dose: null
 function cyclePeriods() {
   // Pairs cycle_start/cycle_end chronologically into periods; the most recent period has end:null
   // if it's still active. Returned most-recent-first for display.
+  //
+  // A second cycle_start logged while one is already open (no cycle_end between them — e.g. a
+  // double-tap, or correcting an accidental Start via the "+" log-for-another-day control) does
+  // NOT start a second period. It updates the still-open period's start time instead. This keeps
+  // this list consistent with cycleActive()/daysSinceCycleStart(), which already treat only the
+  // single latest event as authoritative — without this, the earlier open period would be
+  // orphaned and stuck showing as "Active" in history forever, even after a real Period End is
+  // later logged against the newer start. Found live during the 30-use-case QA pass (UC20): two
+  // back-to-back Period Starts around 7/14 left a permanently un-closeable "7/14/2026 – Active"
+  // duplicate in Cycle History.
   const events = cycleEntries();
   const periods = [];
   let cur = null;
   events.forEach(e => {
-    if (e.medId === 'cycle_start') { cur = { start: e.ts, end: null }; periods.push(cur); }
+    if (e.medId === 'cycle_start') {
+      if (cur && cur.end === null) { cur.start = e.ts; }
+      else { cur = { start: e.ts, end: null }; periods.push(cur); }
+    }
     else if (e.medId === 'cycle_end' && cur && cur.end === null) { cur.end = e.ts; }
   });
   return periods.reverse();
@@ -961,11 +974,18 @@ function fmtInpatientDateTime(ts) {
 }
 function inpatientEntries() { return state.entries.filter(e => e.medId === 'inpatient_start' || e.medId === 'inpatient_end').sort((a, b) => a.ts - b.ts); }
 function inpatientPeriods() {
+  // See cyclePeriods()'s matching comment: a second inpatient_start logged while one is already
+  // open (no inpatient_end between them — reachable via the "+ Log for another day" control, which
+  // has no active-stay guard the way the main Start button does) updates the still-open period's
+  // start/startId instead of orphaning a second, permanently-"Active" period in history.
   const events = inpatientEntries();
   const periods = [];
   let cur = null;
   events.forEach(e => {
-    if (e.medId === 'inpatient_start') { cur = { start: e.ts, end: null, startId: e.id, endId: null }; periods.push(cur); }
+    if (e.medId === 'inpatient_start') {
+      if (cur && cur.end === null) { cur.start = e.ts; cur.startId = e.id; }
+      else { cur = { start: e.ts, end: null, startId: e.id, endId: null }; periods.push(cur); }
+    }
     else if (e.medId === 'inpatient_end' && cur && cur.end === null) { cur.end = e.ts; cur.endId = e.id; }
   });
   return periods.reverse(); // most recent first
