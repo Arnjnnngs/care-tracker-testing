@@ -1982,6 +1982,34 @@ function saveMedicationEditor() {
   setToast(saved.name + (editor.mode === 'add' ? ' added to medication management.' : ' updated.'));
 }
 
+// Meds that render as their own standalone Quick Log card on Home (not folded into the Morning
+// meds / Evening meds grouped card). This is exactly the population the Home Quick Log grid at
+// state.meds.filter(m => m.quickLog && ...) draws from and renders in state.meds array order, so
+// reordering this subset is what actually changes the order those cards appear on Home.
+function reorderableHomeMeds() {
+  return state.meds.filter(med => med.quickLog && !med.groupedMorning && !med.groupedEvening);
+}
+
+// Swaps two meds' positions directly within state.meds (by id), leaving every other medication's
+// position untouched — including any grouped/managed-only meds that happen to sit between them in
+// the raw array. dir is -1 (move up/earlier) or +1 (move down/later), relative to the reorderable
+// subset's current order, not raw array index.
+function moveReorderableMed(id, dir) {
+  const list = reorderableHomeMeds();
+  const idx = list.findIndex(med => med.id === id);
+  const swapIdx = idx + dir;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= list.length) return;
+  const aId = list[idx].id, bId = list[swapIdx].id;
+  const meds = state.meds.slice();
+  const aPos = meds.findIndex(med => med.id === aId);
+  const bPos = meds.findIndex(med => med.id === bId);
+  const tmp = meds[aPos];
+  meds[aPos] = meds[bPos];
+  meds[bPos] = tmp;
+  persistMedicationConfig(meds, state.archivedMeds);
+  setState({ meds });
+}
+
 function deleteMedicationConfig(id) {
   const med = state.meds.find(item => item.id === id);
   if (!med) return;
@@ -2055,7 +2083,37 @@ function renderMedicationEditor() {
 }
 
 function renderMedicationManager(now) {
-  const cards = state.meds.map(med => {
+  // Alphabetical for easy scanning — independent of the underlying state.meds array order, which is
+  // preserved separately to drive Home's Quick Log card order (see the Home screen order section below).
+  const sortedMeds = state.meds.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const reorderable = reorderableHomeMeds();
+  const homeOrderSection = reorderable.length > 1 ? h('section', { style: { display: 'flex', flexDirection: 'column', gap: '9px' } },
+    h('div', null,
+      h('div', { style: { fontSize: '12px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8E3D61' } }, 'Home screen order'),
+      h('div', { style: { fontSize: '11.5px', color: '#6E5261', marginTop: '3px', lineHeight: '1.35' } }, 'Sets the order these individual medication cards appear in Home’s Quick Log grid. Grouped Morning/Evening meds aren’t included here.')
+    ),
+    h('div', { style: { background: 'rgba(255,255,255,0.60)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.16)', borderRadius: '17px', overflow: 'hidden', boxShadow: '0 3px 16px rgba(180,130,150,0.09), inset 0 1px 0 rgba(255,255,255,0.75)' } },
+      ...reorderable.map((med, i) => {
+        // h() falls back to el.setAttribute(k, v) for unrecognized attrs, and setAttribute('disabled',
+        // false) still sets the attribute (browsers treat any presence of `disabled` as disabled,
+        // regardless of its string value) — so `disabled` must be OMITTED entirely when not disabled,
+        // never passed as `disabled: false`, or every arrow button would render permanently disabled.
+        const atTop = i === 0, atBottom = i === reorderable.length - 1;
+        const arrowBtn = (dir, isDisabled, label, glyph) => h('button', {
+          onClick: () => moveReorderableMed(med.id, dir),
+          ...(isDisabled ? { disabled: true } : {}),
+          'aria-label': label + ' ' + med.name,
+          style: { width: '32px', height: '32px', borderRadius: '9px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: isDisabled ? 'rgba(125,105,116,0.06)' : 'rgba(170,83,117,0.10)', color: isDisabled ? '#C4B4BE' : '#8E3D61', border: '1px solid ' + (isDisabled ? 'rgba(125,105,116,0.10)' : 'rgba(170,83,117,0.18)'), fontSize: '13px', fontWeight: '800', cursor: isDisabled ? 'default' : 'pointer' }
+        }, glyph);
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 13px', borderTop: i > 0 ? '1px solid rgba(212,104,138,0.10)' : 'none' } },
+          h('span', { style: { flex: '1', minWidth: '0', fontSize: '14px', fontWeight: '700', color: '#342530' } }, med.name),
+          arrowBtn(-1, atTop, 'Move up', '▲'),
+          arrowBtn(1, atBottom, 'Move down', '▼')
+        );
+      })
+    )
+  ) : null;
+  const cards = sortedMeds.map(med => {
     const deleting = state.confirmDeleteMed === med.id;
     return h('article', { style: { background: 'rgba(255,255,255,0.60)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.16)', borderRadius: '17px', padding: '13px', boxShadow: '0 3px 16px rgba(180,130,150,0.09), inset 0 1px 0 rgba(255,255,255,0.75)' } },
       h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' } },
@@ -2095,6 +2153,7 @@ function renderMedicationManager(now) {
       h('button', { onClick: () => openMedicationEditor(null), style: { flexShrink: '0', minHeight: '40px', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: '5px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '12.5px', fontWeight: '800', boxShadow: 'inset 0 -2px 0 rgba(121,57,84,0.35)' } }, appIcon('plus', 16), 'Add')
     ),
     renderMedicationEditor(),
+    homeOrderSection,
     h('div', { style: { display: 'flex', flexDirection: 'column', gap: '9px' } }, ...cards)
   ];
 }
