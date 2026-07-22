@@ -17,9 +17,35 @@
 > **Purpose:** Complete context for any AI assistant to understand, maintain, and extend this repo
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
-> **Last updated:** July 22, 2026
-> **Current version:** v62 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Last updated:** July 23, 2026
+> **Current version:** v66 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
+>
+> **30-use-case end-to-end QA pass (Jul 22–23, 2026): complete, all issues fixed, full re-test clean.**
+> Every feature was tested against a coherent multi-day patient-story dataset (still in Firestore,
+> not cleaned up per standing test-data rules) and checked against its *original documented spec* —
+> TESTING_README.md, this file, and the version-history changelog entries — not just "does it seem
+> to work." Six real bugs were found and fixed, each with a regression test and a full suite re-run:
+> - **v61/v62** — Zofran's chemo-day block was 3 days instead of the documented 2 (two-part fix, see
+>   below). **Production has the identical original bug and has not been touched** — flagged to
+>   Aaron separately for a production-only decision.
+> - **v63** — Symptoms tab subtitle (and this file's own "App Views" section) still described
+>   Diarrhea/Constipation options that v57 had already removed.
+> - **v64** — `fmtDateLabel()` computed its "Today" baseline from real `Date.now()` instead of the
+>   simulated `state.now`, so dose labels kept saying "Today" a full day after the testing-only date
+>   override had advanced past that day.
+> - **v65** — an already-open browser tab could keep running old, already-fixed JS for a long
+>   time: the service worker's `skipWaiting()`/`clients.claim()` alone didn't reliably get a fix
+>   in front of a tab that was already open, since nothing proactively checked for a newer `sw.js`.
+>   Added `registration.update()` on load + a `controllerchange` auto-reload.
+> - **v66** — a second Period/In-Patient Start logged before an End (reachable via the "+ Log for
+>   another day" control) orphaned the earlier one as a permanently-"Active" row in Cycle/In-Patient
+>   History, with no way to fix it via the UI. Fixed `cyclePeriods()`/`inpatientPeriods()`; since both
+>   recompute from raw entries every render, this also self-corrected the pre-existing bad test data.
+>
+> A pre-existing, unrelated legacy test file, `test_bowel_symptoms.js`, was found to be broken/stale
+> (hangs, reads a hardcoded path unrelated to this repo) — out of scope for this pass, not fixed,
+> flagged here for a future cleanup decision.
 >
 > **v61/v62 bug fix (found during a live 30-use-case QA pass):** `zofranBlockedOn()` was blocking 3 days
 > post-chemo (`o >= 0 && o <= 2`) instead of the documented 2 (`o >= 0 && o <= 1`, see below and
