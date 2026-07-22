@@ -452,7 +452,7 @@ function toLocalISO(ts) {
 }
 
 function fmtDateLabel(ts) {
-  const d0 = dayStart(Date.now());
+  const d0 = dayStart(state.now);
   const entryDay = dayStart(ts);
   const time = new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const weekday = new Date(ts).toLocaleDateString([], { weekday: 'long' });
