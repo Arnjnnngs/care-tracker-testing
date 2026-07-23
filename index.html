@@ -427,7 +427,7 @@ function dexActiveOn(dayTs) { const o = chemoOffsetFor(dayTs); return o !== null
 // Zofran is blocked for 3 days: chemo day itself plus the 2 days after (e.g. chemo Thursday ->
 // blocked Thu/Fri/Sat, opens Sunday). Confirmed by Aaron as the original, correct spec — v61/v62
 // of this file incorrectly "fixed" this to a 2-day block based on stale documentation elsewhere in
-// this repo; reverted in v67. See TESTING_README.md's v67 changelog entry.
+// this repo; reverted in v67. See BETA_README.md's v67 changelog entry.
 function zofranBlockedOn(dayTs) { const o = chemoOffsetFor(dayTs); return o !== null && o >= 0 && o <= 2; }
 function dexWindowsForOffset(offset) { return offset === 1 ? [{ start: 8, end: 12, name: 'Morning' }] : [{ start: 8, end: 12, name: 'Morning' }, { start: 14, end: 18, name: 'Afternoon' }]; }
 
