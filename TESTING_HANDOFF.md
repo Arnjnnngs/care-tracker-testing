@@ -18,7 +18,7 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 23, 2026
-> **Current version:** v69 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v70 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Zofran chemo-block is a 3-day block — chemo day plus the 2 days after** (e.g. chemo Thursday ->
@@ -581,6 +581,25 @@ were corrupted and a cache reset understandably did nothing).
    purposes and separately filters anything in `dismissedMisses` — both checked on every call, so
    there is no separate migration step needed for older data (a doc without these fields just behaves
    as empty/default).
+10. **KNOWN BUG, unresolved as of v70 — the `dismissedMisses` field write is rejected by Firestore
+    Security Rules.** Both the per-row "Clear" button (History/Journal missed rows, added v68) and the
+    new "Clear all" button (History missed-only view, added v70) write to
+    `caretracker_test_prefs/settings.dismissedMisses` via `setDoc(..., {merge:true})`, and both fail
+    with a "Could not save — check connection and try again" toast. Confirmed live (not a guess) by
+    calling the Firestore SDK directly from the deployed page: writing `{missedClearedAt: ...}` to that
+    same document succeeds, but writing `{dismissedMisses: [...]}` — or literally any other field name
+    — returns `permission-denied`. This means the project's Firestore Security Rules for
+    `caretracker_test_prefs/{document}` almost certainly allowlist only the `missedClearedAt` field
+    (likely something like `request.resource.data.diff(resource.data).affectedKeys().hasOnly(['missedClearedAt'])`),
+    left over from when that was the only field this collection ever stored. **This cannot be fixed
+    from the codebase** — modifying Firestore Security Rules requires access to the Firebase console
+    for project `fuelforge-7c132` (Firestore Database → Rules), which is account/security
+    configuration outside what an AI assistant should change unilaterally. To fix: open the Rules tab
+    for that project, find the block governing `caretracker_test_prefs`, and either add
+    `dismissedMisses` to the allowed field list or relax the rule to allow any field on that document
+    (this is a no-auth testing collection already, so a permissive rule carries the same risk profile
+    it already has today). Once updated, both Clear buttons will work with no code changes needed —
+    the client-side logic is already correct and covered by `test_v70_batch.js`.
 
 ## 10. Version History
 

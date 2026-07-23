@@ -285,7 +285,7 @@ const CONFIG = { patientName: 'Brandi', ceilingMg: 2500, tempUnit: 'Fahrenheit' 
 
 // State
 const initialMedicationConfig = loadMedicationConfig();
-let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, missedClearedAt: 0, dismissedMisses: [], confirmClearChemo: false, chemoCalOpen: false, chemoCalCursor: null };
+let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, missedClearedAt: 0, dismissedMisses: [], confirmClearChemo: false, chemoCalOpen: false, chemoCalCursor: null, historyMissedOnly: false };
 let toastTimer = null;
 let unsub = null;
 let unsubPrefs = null;
@@ -1179,10 +1179,33 @@ function openReport(report) {
   window.scrollTo(0, 0);
 }
 
-// Jumps straight to the top of the History tab -- used by the pinned "previous days missed"
-// header card (v69) so resolving a past miss is a single tap away from anywhere in the app.
+// Jumps straight to the top of the History tab, filtered to missed doses only (v70) -- used by
+// both the pinned "previous days missed" header card (v69) and the Today missed-dose banner, so
+// clicking either one takes the caregiver directly to a focused missed-only list instead of the
+// full (much longer) day-by-day History. The "Show all" toggle in History switches back.
 function goToHistoryTop() {
+  setState({ historyMissedOnly: true });
   openReport('history');
+}
+
+// Bulk-dismisses every missed dose currently visible in History's missed-only view (respecting
+// whatever's already been resolved/dismissed) in one write, then confirms with a toast -- the
+// "Clear all" companion to the per-row Clear button, for clearing a backlog in one tap instead of
+// one row at a time. Uses the same dismissedMisses prefs field as the per-row Clear (v68), so it's
+// subject to the same Firestore rules as that field.
+async function clearAllMissedInHistory(now) {
+  const all = [];
+  for (let d = dayStart(MISSED_TRACK_SINCE); d <= dayStart(now); d += 86400000) {
+    missedDosesFor(d, now).forEach(m => all.push(missKey(m)));
+  }
+  if (!all.length) return;
+  try {
+    const next = (state.dismissedMisses || []).concat(all);
+    await setDoc(PREFS_DOC, { dismissedMisses: next }, { merge: true });
+    setToast(all.length + ' missed dose' + (all.length > 1 ? 's' : '') + ' cleared');
+  } catch (err) {
+    setToast('Could not save — check connection and try again');
+  }
 }
 
 function renderTestingControls() {
@@ -1338,7 +1361,11 @@ function render() {
     h('div', { style: { position: 'fixed', top: '40%', left: '50%', width: '400px', height: '400px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,150,180,0.10) 0%, transparent 70%)', pointerEvents: 'none', zIndex: '0', transform: 'translateX(-50%)' } }),
     renderHeader(now),
     h('main', { style: { position: 'relative', zIndex: '1', maxWidth: '720px', margin: '0 auto', padding: '16px 16px 20px', display: 'flex', flexDirection: 'column', gap: '18px' } }, ...renderContent(now, mg, pct, tyColor, ceiling)),
-    state.toast ? h('div', { style: { position: 'fixed', bottom: 'calc(96px + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', background: 'rgba(60,30,50,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', color: '#fff', padding: '12px 20px', borderRadius: '99px', fontSize: '14px', fontWeight: '600', boxShadow: '0 10px 28px rgba(120,60,90,0.2), 0 0 0 1px rgba(255,255,255,0.3)', zIndex: '50', maxWidth: '90vw', textAlign: 'center', whiteSpace: 'nowrap' } }, state.toast) : null,
+    // v70: toast now wraps onto multiple lines instead of forcing a single nowrap line -- long
+    // messages (e.g. "Dexamethasone marked as skipped for Afternoon window") were overflowing
+    // past the edges of the pill instead of fitting inside it. Width is capped tighter (min(90vw,
+    // 340px)) so wrapped text still reads as a compact toast, not an edge-to-edge banner.
+    state.toast ? h('div', { style: { position: 'fixed', bottom: 'calc(96px + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', background: 'rgba(60,30,50,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', color: '#fff', padding: '12px 20px', borderRadius: '20px', fontSize: '14px', fontWeight: '600', lineHeight: '1.4', boxShadow: '0 10px 28px rgba(120,60,90,0.2), 0 0 0 1px rgba(255,255,255,0.3)', zIndex: '50', maxWidth: 'min(90vw, 340px)', textAlign: 'center', whiteSpace: 'normal', wordBreak: 'break-word' } }, state.toast) : null,
     renderTimeModal(),
     (state.view === 'reports' && state.reportsView) ? h('div', { style: { position: 'fixed', zIndex: '34', left: '0', right: '0', bottom: 'calc(78px + env(safe-area-inset-bottom))', display: 'flex', justifyContent: 'center', pointerEvents: 'none' } },
       h('button', { onClick: () => setState({ reportsView: null }), style: { pointerEvents: 'auto', minHeight: '42px', padding: '0 18px', borderRadius: '99px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(60,30,50,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', fontSize: '13px', fontWeight: '800', boxShadow: '0 10px 28px rgba(120,60,90,0.22)' } }, '↩ Back')
@@ -1355,6 +1382,12 @@ function render() {
   root.appendChild(page);
 }
 
+// Short "Mon, Jul 20" label for a collapsed date-picker pill button (v70).
+function calPillLabel(dateStr) {
+  if (!dateStr) return 'Pick a date';
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  return new Date(y, mo - 1, d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
 function calShift(cursorStr, delta) {
   const [y, mo] = cursorStr.split('-').map(Number);
   const nd = new Date(y, mo - 1 + delta, 1);
@@ -1421,8 +1454,14 @@ function renderTimeModal() {
   const medForPain = m.type === 'med' ? state.meds.find(x => x.id === m.medId) : null;
   const showPainScale = !!(medForPain && medForPain.painScale);
 
+  // v70: the modal card now caps its own height to the viewport and scrolls internally
+  // (maxHeight + overflowY) instead of growing past the screen -- previously a tall body (e.g.
+  // the period Start+End calendars, or the Symptom dropdown+note+calendar) could push the
+  // Cancel/Confirm buttons below the visible viewport with no way to reach them. The date
+  // pickers below are also now collapsible (calPillLabel()) so the common case doesn't need
+  // the scroll at all -- both fixes address the same "doesn't fit on screen" report.
   return h('div', { style: { position: 'fixed', inset: '0', background: 'rgba(60,30,50,0.4)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: '60', padding: '20px' }, onClick: (e) => { if (e.target === e.currentTarget) setState({ timeModal: null }); } },
-    h('div', { style: { background: 'rgba(255,245,248,0.96)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '22px', padding: '24px 22px', width: '320px', maxWidth: '100%', boxShadow: '0 24px 64px rgba(120,60,90,0.18), 0 0 0 1px rgba(255,255,255,0.5), inset 0 1px 0 rgba(255,255,255,0.7)' } },
+    h('div', { style: { background: 'rgba(255,245,248,0.96)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '22px', padding: '24px 22px', width: '320px', maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxShadow: '0 24px 64px rgba(120,60,90,0.18), 0 0 0 1px rgba(255,255,255,0.5), inset 0 1px 0 rgba(255,255,255,0.7)' } },
       h('div', { style: { fontSize: '16px', fontWeight: '800', marginBottom: '22px', textAlign: 'center', letterSpacing: '-0.01em' } }, title),
       m.type === 'symptom' ? h('div', { style: { marginBottom: '16px' } },
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Symptom'),
@@ -1445,10 +1484,19 @@ function renderTimeModal() {
       ) : null,
       m.type === 'period' ? h('div', null,
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Start'),
-        renderCalendar(m.startValue.slice(0, 10), m.startCalCursor || m.startValue.slice(0, 7),
-          (ds) => { state.timeModal.startValue = ds + 'T' + state.timeModal.startValue.slice(11); state.timeModal.startCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
-          (delta) => { const cur = state.timeModal.startCalCursor || state.timeModal.startValue.slice(0, 7); state.timeModal.startCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+        // v70: calendars are collapsed behind a date pill by default -- Start and End are never both
+        // expanded at once (opening one collapses the other), which is what keeps this modal short
+        // enough to fit a phone screen even with two dates in play.
+        h('button', { onClick: () => { state.timeModal.startCalOpen = !state.timeModal.startCalOpen; state.timeModal.endCalOpen = false; setState({ timeModal: state.timeModal }); }, className: 'mono', style: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '44px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+          h('span', null, calPillLabel(m.startValue.slice(0, 10))),
+          h('span', { style: { fontSize: '10px', color: '#8A6479' } }, m.startCalOpen ? '▲' : '▼')
         ),
+        m.startCalOpen ? h('div', { style: { marginTop: '8px' } },
+          renderCalendar(m.startValue.slice(0, 10), m.startCalCursor || m.startValue.slice(0, 7),
+            (ds) => { state.timeModal.startValue = ds + 'T' + state.timeModal.startValue.slice(11); state.timeModal.startCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+            (delta) => { const cur = state.timeModal.startCalCursor || state.timeModal.startValue.slice(0, 7); state.timeModal.startCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+          )
+        ) : null,
         h('input', { type: 'time', value: m.startValue.slice(11), onInput: (e) => { state.timeModal.startValue = state.timeModal.startValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '44px', marginTop: '8px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
         h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', fontSize: '13px', fontWeight: '600', color: '#5A4652', cursor: 'pointer' } },
           h('input', { type: 'checkbox', checked: !!m.ongoing, onChange: (e) => { state.timeModal.ongoing = e.target.checked; setState({ timeModal: state.timeModal }); } }),
@@ -1456,18 +1504,33 @@ function renderTimeModal() {
         ),
         !m.ongoing ? h('div', { style: { marginTop: '14px' } },
           h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'End'),
-          renderCalendar(m.endValue.slice(0, 10), m.endCalCursor || m.endValue.slice(0, 7),
-            (ds) => { state.timeModal.endValue = ds + 'T' + state.timeModal.endValue.slice(11); state.timeModal.endCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
-            (delta) => { const cur = state.timeModal.endCalCursor || state.timeModal.endValue.slice(0, 7); state.timeModal.endCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+          h('button', { onClick: () => { state.timeModal.endCalOpen = !state.timeModal.endCalOpen; state.timeModal.startCalOpen = false; setState({ timeModal: state.timeModal }); }, className: 'mono', style: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '44px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+            h('span', null, calPillLabel(m.endValue.slice(0, 10))),
+            h('span', { style: { fontSize: '10px', color: '#8A6479' } }, m.endCalOpen ? '▲' : '▼')
           ),
+          m.endCalOpen ? h('div', { style: { marginTop: '8px' } },
+            renderCalendar(m.endValue.slice(0, 10), m.endCalCursor || m.endValue.slice(0, 7),
+              (ds) => { state.timeModal.endValue = ds + 'T' + state.timeModal.endValue.slice(11); state.timeModal.endCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+              (delta) => { const cur = state.timeModal.endCalCursor || state.timeModal.endValue.slice(0, 7); state.timeModal.endCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+            )
+          ) : null,
           h('input', { type: 'time', value: m.endValue.slice(11), onInput: (e) => { state.timeModal.endValue = state.timeModal.endValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '44px', marginTop: '8px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } })
         ) : h('div', { style: { fontSize: '12px', color: '#7D6974', marginTop: '10px', lineHeight: '1.4' } }, 'Only a Start will be logged \u2014 add the End later from the card once this stay is over.')
       ) : h('div', null,
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Date'),
-        renderCalendar(m.timeValue.slice(0, 10), m.calCursor || m.timeValue.slice(0, 7),
-          (ds) => { state.timeModal.timeValue = ds + 'T' + state.timeModal.timeValue.slice(11); state.timeModal.calCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
-          (delta) => { const cur = state.timeModal.calCursor || state.timeModal.timeValue.slice(0, 7); state.timeModal.calCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+        // v70: collapsed behind a date pill by default (same pattern as the period Start/End
+        // pickers above) -- this is what was overflowing the Symptom modal, which also carries a
+        // dropdown + note textarea above this and had no way to scroll to reach Cancel/Confirm.
+        h('button', { onClick: () => { state.timeModal.calOpen = !state.timeModal.calOpen; setState({ timeModal: state.timeModal }); }, className: 'mono', style: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '44px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+          h('span', null, calPillLabel(m.timeValue.slice(0, 10))),
+          h('span', { style: { fontSize: '10px', color: '#8A6479' } }, m.calOpen ? '▲' : '▼')
         ),
+        m.calOpen ? h('div', { style: { marginTop: '8px' } },
+          renderCalendar(m.timeValue.slice(0, 10), m.calCursor || m.timeValue.slice(0, 7),
+            (ds) => { state.timeModal.timeValue = ds + 'T' + state.timeModal.timeValue.slice(11); state.timeModal.calCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+            (delta) => { const cur = state.timeModal.calCursor || state.timeModal.timeValue.slice(0, 7); state.timeModal.calCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+          )
+        ) : null,
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', margin: '14px 0 8px' } }, 'Time'),
         h('input', { type: 'time', value: m.timeValue.slice(11), onInput: (e) => { state.timeModal.timeValue = state.timeModal.timeValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '48px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
         h('div', { style: { fontSize: '12px', color: '#7D6974', marginTop: '6px' } }, 'Defaults to now — edit if logging a past time')
@@ -1558,12 +1621,15 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
   // and dismiss the current list without deleting the underlying data (new misses still show).
   // Persisted via Firestore (caretracker_test_prefs) so it survives reloads across devices.
   if (bannerItems.length) {
-    parts.push(h('div', { style: { background: 'rgba(192,69,59,0.16)', border: '2px solid #C0453B', borderRadius: '16px', padding: '15px 16px', display: 'flex', gap: '12px', alignItems: 'flex-start', boxShadow: '0 4px 24px rgba(192,69,59,0.25)' } },
+    // v70: the whole banner is now clickable -- tapping it (anywhere except the Clear button,
+    // which stops propagation) jumps to History filtered to missed-only, same as the pinned
+    // previous-days card. Clear still just dismisses today's banner in place without navigating.
+    parts.push(h('div', { onClick: goToHistoryTop, style: { background: 'rgba(192,69,59,0.16)', border: '2px solid #C0453B', borderRadius: '16px', padding: '15px 16px', display: 'flex', gap: '12px', alignItems: 'flex-start', boxShadow: '0 4px 24px rgba(192,69,59,0.25)', cursor: 'pointer' } },
       h('span', { style: { flexShrink: '0', width: '28px', height: '28px', borderRadius: '50%', background: '#C0453B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '17px' } }, '!'),
       h('div', { style: { flex: '1' } },
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '4px' } },
           h('div', { style: { fontWeight: '800', color: '#C0453B', fontSize: '15.5px', letterSpacing: '0.02em', textTransform: 'uppercase' } }, 'Missed dose' + (bannerItems.length > 1 ? 's' : '')),
-          h('button', { onClick: clearMissedDoses, style: { flexShrink: '0', minHeight: '30px', padding: '0 12px', borderRadius: '99px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '11.5px', fontWeight: '800' } }, 'Clear')
+          h('button', { onClick: (ev) => { ev.stopPropagation(); clearMissedDoses(); }, style: { flexShrink: '0', minHeight: '30px', padding: '0 12px', borderRadius: '99px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '11.5px', fontWeight: '800' } }, 'Clear')
         ),
         h('div', { style: { color: '#A13830', fontSize: '14px', fontWeight: '600', lineHeight: '1.5' } },
           bannerItems.map(m => m.when + ': ' + nameOf(m.medId) + ' — ' + m.windowName + ' window (' + fmtTime(m.ts) + ') closed with no dose logged').join(' · '))
@@ -2097,7 +2163,7 @@ function medicationFormFrom(med) {
     type: base.type === 'win' ? 'win' : 'gap',
     gapH: base.gapH || 0,
     dosesText: base.doses && base.doses.length ? base.doses.map(dose => dose.label).join(', ') : '',
-    windowsText: base.windows && base.windows.length ? base.windows.map(window => String(window.start) + ':00-' + String(window.end) + ':00 ' + (window.name || '')).join(', ') : '08:00-20:00 Daily',
+    windowsText: base.windows && base.windows.length ? base.windows.map(window => formatHour(window.start) + '-' + formatHour(window.end) + ' ' + (window.name || '')).join(', ') : '8 AM-8 PM Daily',
     dailyLimit: max || '',
     dailyLimitUnit: base.ceilingUnit || 'mg',
     quickLog: typeof base.quickLog === 'boolean' ? base.quickLog : true,
@@ -2123,14 +2189,24 @@ function parseDoseOptions(text) {
   });
 }
 
+// v70: accepts 12-hour "8 AM-12 PM Morning" input (what the field now shows/expects) while still
+// falling back to plain 24-hour digits ("8-12 Morning") for anyone/anything that types it that way
+// -- Aaron shouldn't need to know military time to edit a schedule window.
+function scheduleHourTo24(hourStr, ampm, isEnd) {
+  let hr = Number(hourStr);
+  const ap = (ampm || '').toLowerCase();
+  if (ap === 'pm' && hr < 12) hr += 12;
+  if (ap === 'am' && hr === 12) hr = isEnd ? 24 : 0;
+  return hr;
+}
 function parseScheduleWindows(text) {
   const windows = [];
   String(text || '').split(',').map(value => value.trim()).filter(Boolean).forEach((segment, index) => {
-    const match = segment.match(/^(\d{1,2})(?::\d{2})?\s*[-–]\s*(\d{1,2})(?::\d{2})?\s*(.*)$/);
+    const match = segment.match(/^(\d{1,2})(?::\d{2})?\s*([AaPp][Mm])?\s*[-–]\s*(\d{1,2})(?::\d{2})?\s*([AaPp][Mm])?\s*(.*)$/);
     if (!match) return;
-    const start = Math.max(0, Math.min(23, Number(match[1])));
-    const end = Math.max(1, Math.min(24, Number(match[2])));
-    if (end > start) windows.push({ start, end, name: (match[3] || ('Window ' + (index + 1))).trim() });
+    const start = Math.max(0, Math.min(23, scheduleHourTo24(match[1], match[2], false)));
+    const end = Math.max(1, Math.min(24, scheduleHourTo24(match[3], match[4], true)));
+    if (end > start) windows.push({ start, end, name: (match[5] || ('Window ' + (index + 1))).trim() });
   });
   return windows;
 }
@@ -2159,7 +2235,7 @@ function saveMedicationEditor() {
   const type = form.type === 'win' ? 'win' : 'gap';
   const gapH = Math.max(0, Number(form.gapH) || 0);
   const windows = type === 'win' ? parseScheduleWindows(form.windowsText) : [];
-  if (type === 'win' && !windows.length) { setToast('Add at least one schedule window, for example 08:00-12:00 Morning.'); return; }
+  if (type === 'win' && !windows.length) { setToast('Add at least one schedule window, for example 8 AM-12 PM Morning.'); return; }
   const dailyLimit = Number(form.dailyLimit) || 0;
   const original = editor.sourceId ? state.meds.find(med => med.id === editor.sourceId) : null;
   const id = nextMedicationId(name, editor.sourceId);
@@ -2273,7 +2349,7 @@ function renderMedicationEditor() {
       h('label', null, fieldLabel('Generic name'), formInput({ value: form.sub, placeholder: 'Generic name', onInput: event => updateMedicationForm('sub', event.target.value) })),
       h('label', null, fieldLabel('Dosage options', 'Separate choices with commas.'), formInput({ value: form.dosesText, placeholder: '500 mg, 1000 mg', onInput: event => updateMedicationForm('dosesText', event.target.value) })),
       h('label', null, fieldLabel('Schedule type'), h('select', { value: form.type, onChange: event => updateMedicationForm('type', event.target.value, true), style: { width: '100%', minHeight: '43px', border: '1px solid rgba(212,104,138,0.22)', borderRadius: '11px', padding: '0 10px', fontSize: '13px', background: 'rgba(255,255,255,0.72)', color: '#342530' } }, h('option', { value: 'gap' }, 'As needed / gap-based'), h('option', { value: 'win' }, 'Scheduled window'))),
-      scheduled ? h('label', { style: { gridColumn: '1 / -1' } }, fieldLabel('Schedule windows', 'Use 24-hour times, e.g. 08:00-12:00 Morning, 20:00-22:00 Evening.'), formInput({ value: form.windowsText, placeholder: '08:00-12:00 Morning, 20:00-22:00 Evening', onInput: event => updateMedicationForm('windowsText', event.target.value) })) : h('label', null, fieldLabel('Minimum gap hours'), formInput({ type: 'number', min: '0', step: '0.5', value: String(form.gapH), onInput: event => updateMedicationForm('gapH', event.target.value) })),
+      scheduled ? h('label', { style: { gridColumn: '1 / -1' } }, fieldLabel('Schedule windows', 'e.g. 8 AM-12 PM Morning, 8 PM-10 PM Evening.'), formInput({ value: form.windowsText, placeholder: '8 AM-12 PM Morning, 8 PM-10 PM Evening', onInput: event => updateMedicationForm('windowsText', event.target.value) })) : h('label', null, fieldLabel('Minimum gap hours'), formInput({ type: 'number', min: '0', step: '0.5', value: String(form.gapH), onInput: event => updateMedicationForm('gapH', event.target.value) })),
       h('label', null, fieldLabel('Daily limit', 'Leave blank for none.'), formInput({ type: 'number', min: '0', step: '0.5', value: String(form.dailyLimit), placeholder: 'No limit', onInput: event => updateMedicationForm('dailyLimit', event.target.value) })),
       h('label', null, fieldLabel('Limit unit'), h('select', { value: form.dailyLimitUnit, onChange: event => updateMedicationForm('dailyLimitUnit', event.target.value), style: { width: '100%', minHeight: '43px', border: '1px solid rgba(212,104,138,0.22)', borderRadius: '11px', padding: '0 10px', fontSize: '13px', background: 'rgba(255,255,255,0.72)', color: '#342530' } }, h('option', { value: 'mg' }, 'mg'), h('option', { value: 'pills' }, 'pills'), h('option', { value: 'applications' }, 'applications'))),
       h('label', { style: { gridColumn: '1 / -1' } }, fieldLabel('Frequency / rule note'), h('textarea', { placeholder: 'For example: Min 4-hour gap or Once nightly', onInput: event => updateMedicationForm('note', event.target.value), style: { width: '100%', minHeight: '72px', resize: 'vertical', border: '1px solid rgba(212,104,138,0.22)', borderRadius: '11px', padding: '10px 11px', fontFamily: 'inherit', fontSize: '13px', lineHeight: '1.35', background: 'rgba(255,255,255,0.72)', color: '#342530' } }, form.note))
@@ -2432,7 +2508,7 @@ function renderHistory(now) {
   const dmap = {};
   state.entries.forEach(e => { if (e.medId === 'inpatient' || e.medId === 'inpatient_start' || e.medId === 'inpatient_end' || e.medId === 'cycle_start' || e.medId === 'cycle_end') return; const k = dayStart(e.ts); (dmap[k] = dmap[k] || []).push(e); });
 
-  const historyDays = Object.keys(dmap).map(k => +k).sort((a, b) => b - a).map(k => {
+  const allHistoryDays = Object.keys(dmap).map(k => +k).sort((a, b) => b - a).map(k => {
     const missed = missedDosesFor(k, now);
     const items = [...dmap[k], ...missed].sort((a, b) => a.ts - b.ts);
     const tyDay = items.filter(e => e.medId === 'tylenol' && !e.missed).reduce((s, e) => s + (e.mg || 0), 0);
@@ -2449,14 +2525,34 @@ function renderHistory(now) {
     const imoDay = items.filter(e => e.medId === 'imodium' && !e.missed).reduce((s, e) => s + (e.pills || 0), 0);
     if (imoDay) summary += ' · ' + imoDay + ' Imodium';
     if (missed.length) summary += ' · ' + missed.length + ' MISSED';
-    return { key: k, label, summary, items };
+    return { key: k, label, summary, items, missedCount: missed.length };
   });
 
+  // v70: "Missed Doses" / "Show all" toggle, driven by clicking a missed-dose banner elsewhere
+  // (Today's banner or the pinned previous-days header card both set historyMissedOnly via
+  // goToHistoryTop()) or by tapping the toggle directly here. Filtered mode keeps each day's
+  // original summary line (for context -- "3 doses · 1 MISSED") but only lists the missed rows
+  // underneath, and drops any day with zero misses entirely.
+  const totalMissed = allHistoryDays.reduce((s, d) => s + d.missedCount, 0);
+  const missedOnly = !!state.historyMissedOnly;
+  const historyDays = missedOnly
+    ? allHistoryDays.map(d => ({ ...d, items: d.items.filter(e => e.missed) })).filter(d => d.items.length > 0)
+    : allHistoryDays;
+
+  const toggleBar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' } },
+    h('div', { style: { display: 'inline-flex', background: 'rgba(212,104,138,0.10)', borderRadius: '11px', padding: '3px', gap: '2px' } },
+      h('button', { onClick: () => setState({ historyMissedOnly: true }), style: { minHeight: '34px', padding: '0 13px', borderRadius: '9px', background: missedOnly ? '#C0453B' : 'transparent', color: missedOnly ? '#fff' : '#7D6974', fontSize: '12.5px', fontWeight: '800' } }, 'Missed Doses' + (totalMissed ? ' (' + totalMissed + ')' : '')),
+      h('button', { onClick: () => setState({ historyMissedOnly: false }), style: { minHeight: '34px', padding: '0 13px', borderRadius: '9px', background: !missedOnly ? '#AA5375' : 'transparent', color: !missedOnly ? '#fff' : '#7D6974', fontSize: '12.5px', fontWeight: '800' } }, 'Show all')
+    ),
+    missedOnly && totalMissed ? h('button', { onClick: () => clearAllMissedInHistory(now), style: { minHeight: '34px', padding: '0 14px', borderRadius: '9px', background: 'rgba(192,69,59,0.14)', border: '1px solid rgba(192,69,59,0.4)', color: '#A13830', fontSize: '12.5px', fontWeight: '800' } }, 'Clear all') : null
+  );
+
   if (historyDays.length === 0) {
-    return [h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, 'No history yet.')];
+    const emptyMsg = missedOnly ? 'No missed doses to review — you\'re all caught up!' : 'No history yet.';
+    return [toggleBar, h('div', { style: { background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px dashed rgba(212,104,138,0.2)', borderRadius: '16px', padding: '30px', textAlign: 'center', color: '#7D6974', fontSize: '14px', lineHeight: '1.5' } }, emptyMsg)];
   }
 
-  return [h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
+  return [toggleBar, h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
     ...historyDays.map(d => h('div', null,
       h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
