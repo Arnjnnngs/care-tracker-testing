@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>CareTracker TESTING</title>
+<title>ChemoWell BETA</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1215,7 +1215,7 @@ function renderTestingControls() {
   const toggle = () => setState({ testDateControlsOpen: !state.testDateControlsOpen });
   return [h('div', { style: { background: 'rgba(199,120,0,0.08)', border: '1px dashed rgba(199,120,0,0.52)', borderRadius: '14px', padding: '0 12px', color: '#704B12' } },
     h('div', { onClick: toggle, style: { minHeight: '42px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', fontSize: '12px', fontWeight: '800', letterSpacing: '0.04em', textTransform: 'uppercase' } },
-      h('span', null, 'Testing date controls'),
+      h('span', null, 'Beta date controls'),
       h('span', { style: { fontSize: '10px' } }, isOpen ? '▲' : '▼')
     ),
     isOpen ? h('div', { style: { padding: '0 0 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
@@ -1229,7 +1229,7 @@ function renderTestingControls() {
 
 function renderHeader(now) {
   const name = (CONFIG.patientName || '').trim();
-  const title = name ? (name + '’s Meds') : 'CareTracker';
+  const title = name ? (name + '’s Meds') : 'ChemoWell';
   const dateLabel = new Date(now).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
   const pastMissed = pastMissedCount(now);
   return h('header', { style: { position: 'sticky', top: '0', zIndex: '20', background: 'rgba(255,240,243,0.88)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', borderBottom: '1px solid rgba(212,104,138,0.16)', padding: '12px 16px', boxShadow: '0 4px 22px rgba(180,130,150,0.10)' } },
@@ -1237,8 +1237,8 @@ function renderHeader(now) {
       h('div', { style: { minWidth: '0', flex: '1' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', color: '#AA5375', marginBottom: '4px' } },
           appIcon('heart', 18),
-          h('span', { style: { fontSize: '14px', fontWeight: '800', letterSpacing: '-0.01em' } }, 'CareTracker'),
-          TEST_MODE ? h('span', { style: { color: '#fff', background: '#C77800', border: '1px solid #A86400', borderRadius: '99px', padding: '4px 11px', fontSize: '11.5px', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', boxShadow: '0 2px 6px rgba(199,120,0,0.4)' } }, '⚠ TESTING') : null
+          h('span', { style: { fontSize: '14px', fontWeight: '800', letterSpacing: '-0.01em' } }, 'ChemoWell'),
+          TEST_MODE ? h('span', { style: { color: '#fff', background: '#C77800', border: '1px solid #A86400', borderRadius: '99px', padding: '4px 11px', fontSize: '11.5px', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', boxShadow: '0 2px 6px rgba(199,120,0,0.4)' } }, '⚠ BETA') : null
         ),
         h('div', { style: { fontSize: '22px', fontWeight: '800', letterSpacing: '-0.035em', color: '#342530', lineHeight: '1.05' } }, title),
         h('div', { style: { fontSize: '12px', color: '#6E5261', marginTop: '4px', fontWeight: '600' } }, dateLabel)
@@ -1251,7 +1251,7 @@ function renderHeader(now) {
         )
       )
     ),
-    TEST_MODE ? h('div', { style: { maxWidth: '720px', margin: '10px auto 0', background: '#C77800', color: '#fff', borderRadius: '10px', padding: '6px 12px', fontSize: '11.5px', fontWeight: '800', letterSpacing: '0.03em', textAlign: 'center' } }, '⚠ TESTING ENVIRONMENT — practice data only, not real records') : null,
+    TEST_MODE ? h('div', { style: { maxWidth: '720px', margin: '10px auto 0', background: '#C77800', color: '#fff', borderRadius: '10px', padding: '6px 12px', fontSize: '11.5px', fontWeight: '800', letterSpacing: '0.03em', textAlign: 'center' } }, '⚠ BETA — practice data only, not real records') : null,
     TEST_MODE ? h('div', { style: { maxWidth: '720px', margin: '8px auto 0' } }, ...renderTestingControls()) : null,
     // Pinned "previous days" missed-dose card (v69) -- lives in the sticky header (not the Today
     // page body) so it stays visible no matter how far the user scrolls or which tab they're on,
@@ -1373,7 +1373,7 @@ function render() {
     renderBottomNav(),
     !state.loaded ? h('div', { style: { position: 'fixed', inset: '0', background: 'rgba(255,240,243,0.95)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: '100' } },
       h('div', { style: { textAlign: 'center' } },
-        h('div', { style: { fontSize: '24px', fontWeight: '800', color: '#AA5375', marginBottom: '8px' } }, 'CareTracker'),
+        h('div', { style: { fontSize: '24px', fontWeight: '800', color: '#AA5375', marginBottom: '8px' } }, 'ChemoWell'),
         h('div', { style: { fontSize: '14px', color: '#7D6974' } }, 'Connecting...')
       )
     ) : null

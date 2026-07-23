@@ -14,7 +14,7 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
   const n = payload.notification || {};
-  const title = n.title || 'CareTracker';
+  const title = n.title || 'ChemoWell';
   const options = {
     body: n.body || 'Time for meds',
     icon: 'icon-192.png',

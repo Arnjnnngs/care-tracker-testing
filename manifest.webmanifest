@@ -1,7 +1,7 @@
 {
-  "name": "CareTracker TESTING",
-  "short_name": "CT-TEST",
-  "description": "Real-time family medication & vitals tracker",
+  "name": "ChemoWell Beta",
+  "short_name": "CW Beta",
+  "description": "Chemo medication & symptom tracker (beta)",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#EEF1F0",
