@@ -18,7 +18,7 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 23, 2026
-> **Current version:** v67 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v68 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Zofran chemo-block is a 3-day block — chemo day plus the 2 days after** (e.g. chemo Thursday ->
@@ -574,6 +574,13 @@ were corrupted and a cache reset understandably did nothing).
    **The Morphine half-dose window feature this incident's commit was named for was never actually
    built or added anywhere — production is unaffected and unchanged; if that feature is still wanted,
    it needs to be built fresh in a real editing session.**
+9. **Missed-dose prefs doc gained two fields in v68** — `caretracker_test_prefs/settings` now also
+   stores `dismissedMisses` (array of `medId|ts` keys, written by the per-row "Clear" action) and
+   entries can carry a `skipped: true` flag (written by "Skipped", a real Firestore entry rather than
+   a preference). `missedDosesFor()` treats a `skipped` entry as if it were a real dose for coverage
+   purposes and separately filters anything in `dismissedMisses` — both checked on every call, so
+   there is no separate migration step needed for older data (a doc without these fields just behaves
+   as empty/default).
 
 ## 10. Version History
 

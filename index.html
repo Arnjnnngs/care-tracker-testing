@@ -102,6 +102,31 @@ const PREFS_DOC = doc(db, PREFS_COL_NAME, 'settings');
 function subscribePrefs(callback) {
   return onSnapshot(PREFS_DOC, (snap) => { callback(snap.exists() ? snap.data() : {}); });
 }
+function missKey(e) { return e.medId + '|' + e.ts; }
+
+// Per-row alternative to the banner's bulk "Clear": dismiss just this one missed window without
+// logging a dose or creating any record. Stored as a list of "medId|ts" keys on the same prefs doc
+// as missedClearedAt, so it survives reloads and syncs across devices the same way.
+async function dismissMissedDose(e) {
+  try {
+    const next = (state.dismissedMisses || []).concat([missKey(e)]);
+    await setDoc(PREFS_DOC, { dismissedMisses: next }, { merge: true });
+    setToast('Dismissed');
+  } catch (err) {
+    setToast('Could not save — check connection and try again');
+  }
+}
+
+// Per-row "Skipped": writes a real (permanent) entry marking this window as intentionally not
+// given, rather than just hiding it. missedDosesFor() treats a skipped:true entry the same as a
+// real dose for coverage purposes, so this also removes the window from the banner/History/Journal
+// missed lists automatically. Journal/History render it distinctly ("Skipped", muted) instead of a
+// normal dose amount.
+async function skipMissedDose(e) {
+  await addEntryDB({ medId: e.medId, dose: null, mg: 0, ts: e.ts, skipped: true });
+  setToast(nameOf(e.medId) + ' marked as skipped for ' + e.windowName + ' window');
+}
+
 async function clearMissedDoses() {
   const ts = state.now;
   try {
@@ -260,7 +285,7 @@ const CONFIG = { patientName: 'Brandi', ceilingMg: 2500, tempUnit: 'Fahrenheit' 
 
 // State
 const initialMedicationConfig = loadMedicationConfig();
-let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, missedClearedAt: 0, confirmClearChemo: false };
+let state = { entries: [], chemoDates: [], now: Date.now(), toast: null, warn: null, demo: false, view: 'home', reportsView: null, meds: initialMedicationConfig.meds, archivedMeds: initialMedicationConfig.archivedMeds, medEditor: null, confirmDeleteMed: null, override: null, confirmRemove: null, tempInput: '', weightInput: '', chemoInput: '', weightRange: 'weeks', timeModal: null, loaded: false, dateOffsetDays: 0, testDateControlsOpen: false, missedClearedAt: 0, dismissedMisses: [], confirmClearChemo: false, chemoCalOpen: false, chemoCalCursor: null };
 let toastTimer = null;
 let unsub = null;
 let unsubPrefs = null;
@@ -421,22 +446,26 @@ function missedDosesFor(dayTs, now) {
       ws: d0 + w.start * 3600000, we: d0 + w.end * 3600000,
       nextStart: i + 1 < windows.length ? d0 + windows[i + 1].start * 3600000 : d0 + 86400000,
       covered: false }));
-    // Pass 1: in-window or early doses cover their window
+    // Single pass, processed in window order: each window gets first claim (before later windows
+    // are considered) over any unused same-day dose logged before this window's cutoff (i.e. any
+    // time up to just before the next window opens) -- covering doses given early, on time, or
+    // late. Processing strictly in window order prevents a later window from "stealing" a dose that
+    // legitimately belongs to an earlier window's late-catch-up range: e.g. a single Dexamethasone
+    // dose given at 1pm, between the 8am and 2pm windows, must credit the 8am window it was late
+    // for, not get grabbed by the 2pm window just because 1pm also happens to be before 2pm's close.
+    // (Fixed in v68 -- found via Aaron's report that a late-logged dose could still show as missed.)
     wins.forEach(win => {
-      const hit = dayEntries.find(e => !used.has(e) && e.ts < win.we);
-      if (hit) { used.add(hit); win.covered = true; }
-    });
-    // Pass 2: late doses (after close, before the next window opens) still count
-    wins.forEach(win => {
-      if (win.covered) return;
-      const hit = dayEntries.find(e => !used.has(e) && e.ts >= win.we && e.ts < win.nextStart);
+      const hit = dayEntries.find(e => !used.has(e) && e.ts < win.nextStart);
       if (hit) { used.add(hit); win.covered = true; }
     });
     wins.forEach(win => {
       if (!win.covered && now >= win.we) out.push({ missed: true, medId: med.id, ts: win.ws, windowName: win.w.name });
     });
   });
-  return out.sort((a, b) => a.ts - b.ts);
+  // Per-row "Clear" (dismissMissedDose) hides a specific window without logging anything -- filtered
+  // out here so it disappears everywhere missedDosesFor is used (banner, History, Today's Journal).
+  const dismissed = state.dismissedMisses || [];
+  return out.filter(m => !dismissed.includes(m.medId + '|' + m.ts)).sort((a, b) => a.ts - b.ts);
 }
 function timeBucket(ts) { const hr = new Date(ts).getHours(); if (hr < 6) return 'Overnight'; if (hr < 12) return 'Morning'; if (hr < 17) return 'Afternoon'; return 'Evening'; }
 function fmtTime(ts) { return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
@@ -652,9 +681,14 @@ async function logWeight() {
 async function confirmTimeAndLog() {
   const m = state.timeModal;
   if (!m) return;
-  const ts = new Date(m.timeValue).getTime();
-  if (isNaN(ts)) { setToast('Invalid time'); return; }
-  if (ts > simNow() + 60000 && !m.futureOk) { state.timeModal.futureOk = true; setState({ timeModal: state.timeModal }); return; }
+  // 'period' logs its own Start/End pair below with its own validation -- it has no single
+  // m.timeValue, so it's excluded from this shared single-timestamp check.
+  let ts;
+  if (m.type !== 'period') {
+    ts = new Date(m.timeValue).getTime();
+    if (isNaN(ts)) { setToast('Invalid time'); return; }
+    if (ts > simNow() + 60000 && !m.futureOk) { state.timeModal.futureOk = true; setState({ timeModal: state.timeModal }); return; }
+  }
 
   if (m.type === 'med') {
     const med = state.meds.find(x => x.id === m.medId);
@@ -694,10 +728,36 @@ async function confirmTimeAndLog() {
     }
     setToast(ids.length + ' meds logged at ' + fmtTime(ts));
     setTimeout(() => { if (ids.includes('iron')) afterLog({ medId: 'iron', ts, id: 'pending' }); }, 500);
-  } else if (m.type === 'marker') {
-    setState({ timeModal: null });
-    await addEntryDB({ medId: m.medId, dose: null, mg: 0, ts });
-    setToast(m.label + ' logged for ' + new Date(ts).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + fmtTime(ts));
+  } else if (m.type === 'period') {
+    // Retroactive Start(+Stop) logging for Cycle/In-Patient via the "+" control (v68 redesign).
+    // Always writing a matched Start+End pair (instead of the old single-marker log) means the
+    // resulting period is always well-formed and unambiguous to cyclePeriods()/inpatientPeriods()'s
+    // chronological pairing -- a lone backdated Start could previously get silently swallowed
+    // (overwritten with no visible trace) if a later Start already existed with no End between them.
+    // The "still ongoing" path (End omitted) keeps that same risk, so it's guarded explicitly below.
+    const startTs = new Date(m.startValue).getTime();
+    if (isNaN(startTs)) { setToast('Invalid start time'); return; }
+    if (startTs > simNow() + 60000 && !m.futureOk) { state.timeModal.futureOk = true; setState({ timeModal: state.timeModal }); return; }
+    if (m.ongoing) {
+      const related = state.entries.filter(e => e.medId === m.startMedId || e.medId === m.endMedId);
+      const latest = related.reduce((mx, e) => Math.max(mx, e.ts), -Infinity);
+      if (related.length && startTs <= latest) {
+        setToast('This start time is before an existing ' + m.label + ' entry \u2014 add an End time to close this stay out, or edit the conflicting entry instead.');
+        return;
+      }
+      setState({ timeModal: null });
+      await addEntryDB({ medId: m.startMedId, dose: null, mg: 0, ts: startTs });
+      setToast(m.label + ' Start logged for ' + new Date(startTs).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + fmtTime(startTs));
+    } else {
+      const endTs = new Date(m.endValue).getTime();
+      if (isNaN(endTs)) { setToast('Invalid end time'); return; }
+      if (endTs <= startTs) { setToast('End must be after Start'); return; }
+      if (endTs > simNow() + 60000 && !m.futureOk) { state.timeModal.futureOk = true; setState({ timeModal: state.timeModal }); return; }
+      setState({ timeModal: null });
+      await addEntryDB({ medId: m.startMedId, dose: null, mg: 0, ts: startTs });
+      await addEntryDB({ medId: m.endMedId, dose: null, mg: 0, ts: endTs });
+      setToast(m.label + ' logged: ' + new Date(startTs).toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' \u2013 ' + new Date(endTs).toLocaleDateString([], { month: 'short', day: 'numeric' }));
+    }
   } else if (m.type === 'symptom') {
     if (!m.symptomType) { setToast('Select a symptom first'); return; }
     if (m.symptomType === 'other' && !(m.note || '').trim()) { setToast('Describe the symptom before saving'); return; }
@@ -711,8 +771,8 @@ async function confirmTimeAndLog() {
 
 // Opens the time modal for backdating a Cycle/In-Patient start-or-end marker to a day other
 // than today — a lightweight "+" alternative to the instant same-moment log buttons.
-function logMarkerForDay(medId, label) {
-  setState({ timeModal: { type: 'marker', medId, label, timeValue: nowLocalISO() } });
+function logPeriodForDay(startMedId, endMedId, label) {
+  setState({ timeModal: { type: 'period', startMedId, endMedId, label, startValue: nowLocalISO(), endValue: nowLocalISO(), ongoing: false } });
 }
 
 async function removeEntry(id) {
@@ -943,13 +1003,14 @@ async function submitAppetite(dayStartTs) {
 }
 
 // ---- Symptoms tracking ----
-// Ad hoc, timestamped incident notes (not a daily rollup) — Nausea, Vomiting, Other (free-text via
-// the Note field), fully editable/deletable, no 48h lock. Diarrhea and Constipation were removed as
-// selectable options here (v57) since they're already tracked properly via the dedicated Bowel
-// Movement Home alert/history — having both created confusing duplicate entry points for the same
-// thing. 'diarrhea'/'constipation' remain in SYMPTOM_TYPES/SYMPTOM_COLORS below purely so any
-// pre-existing logged entries of those types still display correctly in history.
-const SYMPTOM_TYPES = { nausea: 'Nausea', vomiting: 'Vomiting', other: 'Other', diarrhea: 'Diarrhea', constipation: 'Constipation' };
+// Ad hoc, timestamped incident notes (not a daily rollup), fully editable/deletable, no 48h lock.
+// Diarrhea and Constipation were removed as selectable options here (v57) since they're already
+// tracked properly via the dedicated Bowel Movement Home alert/history — having both created
+// confusing duplicate entry points for the same thing. 'diarrhea'/'constipation' remain in
+// SYMPTOM_TYPES/SYMPTOM_COLORS below purely so any pre-existing logged entries of those types still
+// display correctly in history. v68: expanded the pickable list from Nausea/Vomiting/Other to the
+// most commonly-tracked chemo side effects, per Aaron's request.
+const SYMPTOM_TYPES = { nausea: 'Nausea', vomiting: 'Vomiting', fatigue: 'Fatigue', mouth_sores: 'Mouth Sores', neuropathy: 'Neuropathy (Numbness/Tingling)', headache: 'Headache', dizziness: 'Dizziness', skin_reaction: 'Skin Reaction/Rash', other: 'Other', diarrhea: 'Diarrhea', constipation: 'Constipation' };
 function symptomEntries() { return state.entries.filter(e => e.medId && e.medId.indexOf('symptom_') === 0).sort((a, b) => b.ts - a.ts); }
 async function logSymptom(type, ts, opts) {
   const entry = { medId: 'symptom_' + type, symptomType: type, ts, note: (opts && opts.note) || '', dose: null, mg: 0 };
@@ -1263,6 +1324,50 @@ function render() {
   root.appendChild(page);
 }
 
+function calShift(cursorStr, delta) {
+  const [y, mo] = cursorStr.split('-').map(Number);
+  const nd = new Date(y, mo - 1 + delta, 1);
+  return nd.getFullYear() + '-' + String(nd.getMonth() + 1).padStart(2, '0');
+}
+
+// Compact month-grid date picker, replacing native date/datetime-local inputs (v68) — native
+// pickers render as a scrolling wheel on mobile, which Aaron asked to replace with a tappable
+// calendar everywhere a date is chosen. dateStr is 'YYYY-MM-DD' (or '' for none selected);
+// cursorStr is the 'YYYY-MM' month currently displayed (independent of the selected date, so
+// navigating months doesn't require a selection). onPick(dateStr) fires when a day is tapped;
+// onNav(delta) fires -1/+1 to move the displayed month.
+function renderCalendar(dateStr, cursorStr, onPick, onNav) {
+  const [cy, cm] = cursorStr.split('-').map(Number);
+  const first = new Date(cy, cm - 1, 1);
+  const startWeekday = first.getDay();
+  const daysInMonth = new Date(cy, cm, 0).getDate();
+  const todayStr = toLocalISO(simNow()).slice(0, 10);
+  const monthLabel = first.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const dstr = (d) => cy + '-' + String(cm).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  return h('div', { style: { background: 'rgba(255,255,255,0.5)', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '13px', padding: '10px 10px 6px' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
+      h('button', { onClick: () => onNav(-1), style: { minHeight: '30px', minWidth: '30px', borderRadius: '8px', background: 'rgba(212,104,138,0.1)', color: '#AA5375', fontSize: '16px', fontWeight: '700' } }, '\u2039'),
+      h('div', { style: { fontSize: '13.5px', fontWeight: '800', color: '#3D2B3A' } }, monthLabel),
+      h('button', { onClick: () => onNav(1), style: { minHeight: '30px', minWidth: '30px', borderRadius: '8px', background: 'rgba(212,104,138,0.1)', color: '#AA5375', fontSize: '16px', fontWeight: '700' } }, '\u203a')
+    ),
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', marginBottom: '2px' } },
+      ...['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(l => h('div', { style: { textAlign: 'center', fontSize: '10px', fontWeight: '700', color: '#8A6479', padding: '2px 0' } }, l))
+    ),
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', paddingBottom: '4px' } },
+      ...cells.map(d => {
+        if (d === null) return h('div', null);
+        const ds = dstr(d);
+        const isSel = ds === dateStr;
+        const isToday = ds === todayStr;
+        return h('button', { onClick: () => onPick(ds), style: { minHeight: '32px', borderRadius: '9px', fontSize: '13px', fontWeight: isSel ? '800' : '600', background: isSel ? '#AA5375' : (isToday ? 'rgba(212,104,138,0.14)' : 'transparent'), color: isSel ? '#fff' : '#3D2B3A', border: isToday && !isSel ? '1px solid rgba(212,104,138,0.45)' : '1px solid transparent' } }, String(d));
+      })
+    )
+  );
+}
+
 function renderTimeModal() {
   if (!state.timeModal) return null;
   const m = state.timeModal;
@@ -1274,8 +1379,8 @@ function renderTimeModal() {
     title = 'Log ' + m.medIds.length + ' meds · ' + m.medIds.map(id => nameOf(id)).join(', ');
   } else if (m.type === 'temp') {
     title = 'Log Temperature · ' + m.tempValue + tempSuffix();
-  } else if (m.type === 'marker') {
-    title = 'Log ' + m.label;
+  } else if (m.type === 'period') {
+    title = 'Log ' + m.label + (m.ongoing ? ' Start' : '');
   } else if (m.type === 'symptom') {
     title = (m.editId ? 'Edit ' : 'Log ') + (m.symptomType ? (SYMPTOM_TYPES[m.symptomType] || m.symptomType) : 'Symptom');
   } else {
@@ -1294,6 +1399,12 @@ function renderTimeModal() {
           h('option', { value: '' }, 'Select...'),
           h('option', { value: 'nausea' }, 'Nausea'),
           h('option', { value: 'vomiting' }, 'Vomiting'),
+          h('option', { value: 'fatigue' }, 'Fatigue'),
+          h('option', { value: 'mouth_sores' }, 'Mouth Sores'),
+          h('option', { value: 'neuropathy' }, 'Neuropathy (Numbness/Tingling)'),
+          h('option', { value: 'headache' }, 'Headache'),
+          h('option', { value: 'dizziness' }, 'Dizziness'),
+          h('option', { value: 'skin_reaction' }, 'Skin Reaction/Rash'),
           h('option', { value: 'other' }, 'Other')
         )
       ) : null,
@@ -1301,9 +1412,33 @@ function renderTimeModal() {
         h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, m.symptomType === 'other' ? 'Describe it (required)' : 'Note (optional)'),
         h('textarea', { value: m.note || '', onInput: (e) => { state.timeModal.note = e.target.value; }, rows: 3, placeholder: m.symptomType === 'other' ? 'What symptom, when, anything else...' : 'What was noticed, when, anything else...', style: { width: '100%', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '10px 14px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', resize: 'vertical', fontFamily: 'inherit' } })
       ) : null,
-      h('div', null,
-        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Date & Time'),
-        h('input', { type: 'datetime-local', value: m.timeValue, onInput: (e) => { state.timeModal.timeValue = e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '52px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
+      m.type === 'period' ? h('div', null,
+        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Start'),
+        renderCalendar(m.startValue.slice(0, 10), m.startCalCursor || m.startValue.slice(0, 7),
+          (ds) => { state.timeModal.startValue = ds + 'T' + state.timeModal.startValue.slice(11); state.timeModal.startCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+          (delta) => { const cur = state.timeModal.startCalCursor || state.timeModal.startValue.slice(0, 7); state.timeModal.startCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+        ),
+        h('input', { type: 'time', value: m.startValue.slice(11), onInput: (e) => { state.timeModal.startValue = state.timeModal.startValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '44px', marginTop: '8px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', fontSize: '13px', fontWeight: '600', color: '#5A4652', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: !!m.ongoing, onChange: (e) => { state.timeModal.ongoing = e.target.checked; setState({ timeModal: state.timeModal }); } }),
+          'Still ongoing (no end yet)'
+        ),
+        !m.ongoing ? h('div', { style: { marginTop: '14px' } },
+          h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'End'),
+          renderCalendar(m.endValue.slice(0, 10), m.endCalCursor || m.endValue.slice(0, 7),
+            (ds) => { state.timeModal.endValue = ds + 'T' + state.timeModal.endValue.slice(11); state.timeModal.endCalCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+            (delta) => { const cur = state.timeModal.endCalCursor || state.timeModal.endValue.slice(0, 7); state.timeModal.endCalCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+          ),
+          h('input', { type: 'time', value: m.endValue.slice(11), onInput: (e) => { state.timeModal.endValue = state.timeModal.endValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '44px', marginTop: '8px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '15px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } })
+        ) : h('div', { style: { fontSize: '12px', color: '#7D6974', marginTop: '10px', lineHeight: '1.4' } }, 'Only a Start will be logged \u2014 add the End later from the card once this stay is over.')
+      ) : h('div', null,
+        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' } }, 'Date'),
+        renderCalendar(m.timeValue.slice(0, 10), m.calCursor || m.timeValue.slice(0, 7),
+          (ds) => { state.timeModal.timeValue = ds + 'T' + state.timeModal.timeValue.slice(11); state.timeModal.calCursor = ds.slice(0, 7); setState({ timeModal: state.timeModal }); },
+          (delta) => { const cur = state.timeModal.calCursor || state.timeModal.timeValue.slice(0, 7); state.timeModal.calCursor = calShift(cur, delta); setState({ timeModal: state.timeModal }); }
+        ),
+        h('div', { style: { fontSize: '11.5px', fontWeight: '700', color: '#8A6479', letterSpacing: '0.05em', textTransform: 'uppercase', margin: '14px 0 8px' } }, 'Time'),
+        h('input', { type: 'time', value: m.timeValue.slice(11), onInput: (e) => { state.timeModal.timeValue = state.timeModal.timeValue.slice(0, 10) + 'T' + e.target.value; }, className: 'mono', style: { width: '100%', minHeight: '48px', border: '1px solid rgba(212,104,138,0.2)', borderRadius: '13px', padding: '0 14px', fontSize: '16px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
         h('div', { style: { fontSize: '12px', color: '#7D6974', marginTop: '6px' } }, 'Defaults to now — edit if logging a past time')
       ),
       showPainScale ? h('div', { style: { marginTop: '16px' } },
@@ -1322,17 +1457,27 @@ function renderTimeModal() {
   );
 }
 
+// Per-missed-window actions (v68, per Aaron's request): a late-logged dose was previously
+// resolved only by inference (logging any same-day dose and hoping missedDosesFor's coverage
+// math caught it), with no explicit way to say "I gave this late" vs "this was deliberately
+// skipped" vs "just dismiss this, nothing to log". Now each row offers all three explicitly.
 function missedRow(e, i) {
-  return h('div', { onClick: () => logMissedDose(e), style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderTop: i > 0 ? '1px solid rgba(192,69,59,0.2)' : 'none', background: 'rgba(192,69,59,0.10)', borderLeft: '4px solid #C0453B', cursor: 'pointer' } },
-    h('div', { className: 'mono', style: { fontSize: '13px', color: '#C0453B', fontWeight: '700', minWidth: '66px' } }, fmtTime(e.ts)),
-    h('div', { style: { flex: '1' } },
-      h('div', { style: { fontSize: '15px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', color: '#C0453B' } },
-        nameOf(e.medId),
-        h('span', { style: { fontSize: '10.5px', fontWeight: '800', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#fff', background: '#C0453B', borderRadius: '6px', padding: '2px 7px' } }, 'Missed')
-      ),
-      h('div', { style: { fontSize: '12.5px', color: '#C0453B', fontWeight: '600' } }, e.windowName + ' window closed — tap to log')
+  return h('div', { style: { padding: '12px 14px', borderTop: i > 0 ? '1px solid rgba(192,69,59,0.2)' : 'none', background: 'rgba(192,69,59,0.10)', borderLeft: '4px solid #C0453B' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+      h('div', { className: 'mono', style: { fontSize: '13px', color: '#C0453B', fontWeight: '700', minWidth: '66px' } }, fmtTime(e.ts)),
+      h('div', { style: { flex: '1' } },
+        h('div', { style: { fontSize: '15px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', color: '#C0453B' } },
+          nameOf(e.medId),
+          h('span', { style: { fontSize: '10.5px', fontWeight: '800', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#fff', background: '#C0453B', borderRadius: '6px', padding: '2px 7px' } }, 'Missed')
+        ),
+        h('div', { style: { fontSize: '12.5px', color: '#C0453B', fontWeight: '600' } }, e.windowName + ' window closed')
+      )
     ),
-    h('span', { style: { flexShrink: '0', fontSize: '11.5px', fontWeight: '800', color: '#C0453B', opacity: '0.7' } }, '›')
+    h('div', { style: { display: 'flex', gap: '6px', marginTop: '10px' } },
+      h('button', { onClick: () => logMissedDose(e), style: { flex: '1', minHeight: '32px', borderRadius: '9px', background: '#C0453B', color: '#fff', fontSize: '12px', fontWeight: '700' } }, 'Took later'),
+      h('button', { onClick: () => skipMissedDose(e), style: { flex: '1', minHeight: '32px', borderRadius: '9px', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.35)', color: '#A13830', fontSize: '12px', fontWeight: '700' } }, 'Skipped'),
+      h('button', { onClick: () => dismissMissedDose(e), style: { flex: '1', minHeight: '32px', borderRadius: '9px', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.35)', color: '#A13830', fontSize: '12px', fontWeight: '700' } }, 'Clear')
+    )
   );
 }
 
@@ -1713,9 +1858,18 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
         h('button', { onClick: () => setState({ confirmClearChemo: false }), style: { color: '#7D6974', fontSize: '12.5px', padding: '8px 6px', fontWeight: '600' } }, 'Keep')
       ) : h('button', { onClick: () => { setState({ confirmClearChemo: true }); setTimeout(() => { if (state.confirmClearChemo) setState({ confirmClearChemo: false }); }, 6000); }, style: { color: '#8A6479', fontSize: '12.5px', padding: '6px', fontWeight: '600' } }, 'Clear')) : null
     ),
-    h('div', { style: { display: 'flex', gap: '6px' } },
-      h('input', { type: 'date', value: state.chemoInput, onInput: (e) => { state.chemoInput = e.target.value; }, className: 'mono', style: { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 12px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A', colorScheme: 'light' } }),
-      h('button', { onClick: setChemoDate, style: { flexShrink: '0', minHeight: '38px', padding: '0 14px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13px', fontWeight: '700' } }, chemoTs ? 'Update' : 'Set date')
+    h('div', null,
+      h('button', { onClick: () => setState({ chemoCalOpen: !state.chemoCalOpen }), style: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '38px', border: '1px solid rgba(212,104,138,0.18)', borderRadius: '11px', padding: '0 12px', fontSize: '14px', background: 'rgba(255,255,255,0.6)', color: '#3D2B3A' } },
+        h('span', { className: 'mono' }, state.chemoInput ? new Date(state.chemoInput + 'T00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : 'Pick a date'),
+        h('span', { style: { fontSize: '10px', color: '#8A6479' } }, state.chemoCalOpen ? '\u25b2' : '\u25bc')
+      ),
+      state.chemoCalOpen ? h('div', { style: { marginTop: '8px' } },
+        renderCalendar(state.chemoInput || '', state.chemoCalCursor || (state.chemoInput ? state.chemoInput.slice(0, 7) : toLocalISO(simNow()).slice(0, 7)),
+          (ds) => { setState({ chemoInput: ds, chemoCalCursor: ds.slice(0, 7) }); },
+          (delta) => { const cur = state.chemoCalCursor || (state.chemoInput ? state.chemoInput.slice(0, 7) : toLocalISO(simNow()).slice(0, 7)); setState({ chemoCalCursor: calShift(cur, delta) }); }
+        ),
+        h('button', { onClick: () => { setChemoDate(); setState({ chemoCalOpen: false }); }, style: { width: '100%', marginTop: '8px', minHeight: '38px', borderRadius: '11px', background: '#AA5375', color: '#fff', fontSize: '13px', fontWeight: '700' } }, chemoTs ? 'Update' : 'Set date')
+      ) : null
     )
   ));
 
@@ -1860,9 +2014,10 @@ function renderToday(now, mg, pct, tyColor, ceiling) {
               h('div', { style: { flex: '1' } },
                 h('div', { style: { fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' } },
                   nameOf(e.medId),
-                  e.override ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#A15B56', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Early') : null
+                  e.override ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#A15B56', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Early') : null,
+                  e.skipped ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#7D6974', background: 'rgba(125,105,116,0.14)', border: '1px solid rgba(125,105,116,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Skipped') : null
                 ),
-                e.dose ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, e.dose + (e.painLevel ? (' · Pain ' + e.painLevel + '/10') : '')) : (e.painLevel ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, 'Pain ' + e.painLevel + '/10') : null)
+                e.skipped ? h('div', { style: { fontSize: '12.5px', color: '#7D6974', fontStyle: 'italic' } }, 'Marked as not given') : e.dose ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, e.dose + (e.painLevel ? (' · Pain ' + e.painLevel + '/10') : '')) : (e.painLevel ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, 'Pain ' + e.painLevel + '/10') : null)
               ),
               removeBtn(e)
             ))
@@ -2252,7 +2407,7 @@ function renderHistory(now) {
     const missed = missedDosesFor(k, now);
     const items = [...dmap[k], ...missed].sort((a, b) => a.ts - b.ts);
     const tyDay = items.filter(e => e.medId === 'tylenol' && !e.missed).reduce((s, e) => s + (e.mg || 0), 0);
-    const doses = items.filter(e => e.medId !== 'temp' && e.medId !== 'weight' && e.medId !== 'cycle_start' && e.medId !== 'cycle_end' && !e.missed).length;
+    const doses = items.filter(e => e.medId !== 'temp' && e.medId !== 'weight' && e.medId !== 'cycle_start' && e.medId !== 'cycle_end' && !e.missed && !e.skipped).length;
     const temps = items.filter(e => e.medId === 'temp').length;
     const weights = items.filter(e => e.medId === 'weight').length;
     const wkday = new Date(k).toLocaleDateString([], { weekday: 'long' });
@@ -2274,8 +2429,11 @@ function renderHistory(now) {
 
   return [h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
     ...historyDays.map(d => h('div', null,
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', marginBottom: '8px' } },
-        h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.03em', textTransform: 'uppercase', color: '#8A6479' } }, d.label),
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          h('div', { style: { fontSize: '13px', fontWeight: '800', letterSpacing: '0.03em', textTransform: 'uppercase', color: '#8A6479' } }, d.label),
+          isInpatientDay(d.key) ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#9A6419', color: '#fff', borderRadius: '99px', padding: '2px 9px', fontSize: '10px', fontWeight: '800', letterSpacing: '0.05em', textTransform: 'uppercase' } }, appIcon('hospital', 11), 'In-Patient') : null
+        ),
         h('div', { className: 'mono', style: { fontSize: '12px', color: d.summary.includes('MISSED') ? '#C0453B' : '#7D6974', fontWeight: d.summary.includes('MISSED') ? '700' : '400' } }, d.summary)
       ),
       h('div', { style: { background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', border: '1px solid rgba(212,104,138,0.12)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 4px 24px rgba(180,130,150,0.10), 0 1px 2px rgba(180,130,150,0.06), inset 0 1px 0 rgba(255,255,255,0.7)' } },
@@ -2293,9 +2451,10 @@ function renderHistory(now) {
               h('div', { style: { flex: '1' } },
                 h('div', { style: { fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' } },
                   nameOf(e.medId),
-                  e.override ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#A15B56', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Early') : null
+                  e.override ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#A15B56', background: 'rgba(192,69,59,0.15)', border: '1px solid rgba(192,69,59,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Early') : null,
+                  e.skipped ? h('span', { style: { fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#7D6974', background: 'rgba(125,105,116,0.14)', border: '1px solid rgba(125,105,116,0.3)', borderRadius: '6px', padding: '1px 6px' } }, 'Skipped') : null
                 ),
-                e.dose ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, e.dose + (e.painLevel ? (' · Pain ' + e.painLevel + '/10') : '')) : (e.painLevel ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, 'Pain ' + e.painLevel + '/10') : null)
+                e.skipped ? h('div', { style: { fontSize: '12.5px', color: '#7D6974', fontStyle: 'italic' } }, 'Marked as not given') : e.dose ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, e.dose + (e.painLevel ? (' · Pain ' + e.painLevel + '/10') : '')) : (e.painLevel ? h('div', { style: { fontSize: '12.5px', color: '#8A6479' } }, 'Pain ' + e.painLevel + '/10') : null)
               ),
               removeBtn(e)
             ));
@@ -2323,7 +2482,7 @@ function renderCycle(now) {
     ),
     h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
       h('button', { onClick: cycleActiveNow ? logCycleEnd : logCycleStart, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: cycleActiveNow ? '#9B5B8A' : '#AA5375', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, cycleActiveNow ? 'Log Period End' : 'Log Period Start'),
-      h('button', { onClick: () => logMarkerForDay(cycleActiveNow ? 'cycle_end' : 'cycle_start', cycleActiveNow ? 'Period End' : 'Period Start'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(212,104,138,0.3)', color: '#AA5375', fontSize: '20px', fontWeight: '700' } }, '+')
+      h('button', { onClick: () => logPeriodForDay('cycle_start', 'cycle_end', 'Period'), title: 'Log a past period (Start + End)', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(212,104,138,0.3)', color: '#AA5375', fontSize: '20px', fontWeight: '700' } }, '+')
     )
   );
 
@@ -2402,11 +2561,11 @@ function renderInPatient(now) {
     ),
     activeNow ? h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
       h('button', { onClick: logInpatientEnd, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: '#9A6419', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(110,70,10,0.35)' } }, 'Log In-Patient End'),
-      h('button', { onClick: () => logMarkerForDay('inpatient_end', 'In-Patient End'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+'),
+      h('button', { onClick: () => logPeriodForDay('inpatient_start', 'inpatient_end', 'In-Patient'), title: 'Log a past stay (Start + End)', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+'),
       h('button', { onClick: undoInpatientStart, style: { flexShrink: '0', minHeight: '52px', padding: '0 16px', borderRadius: '13px', background: confirming ? '#C0453B' : 'rgba(255,255,255,0.6)', border: '1px solid ' + (confirming ? '#C0453B' : 'rgba(154,100,25,0.3)'), color: confirming ? '#fff' : '#9A6419', fontSize: '13.5px', fontWeight: '700' } }, confirming ? 'Tap to confirm' : 'Undo')
     ) : h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
       h('button', { onClick: logInpatientStart, style: { flex: '1', minHeight: '52px', borderRadius: '13px', background: '#9A6419', color: '#fff', fontSize: '15px', fontWeight: '700', boxShadow: 'inset 0 -2px 0 rgba(110,70,10,0.35)' } }, 'Log In-Patient Start'),
-      h('button', { onClick: () => logMarkerForDay('inpatient_start', 'In-Patient Start'), title: 'Log for another day', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+')
+      h('button', { onClick: () => logPeriodForDay('inpatient_start', 'inpatient_end', 'In-Patient'), title: 'Log a past stay (Start + End)', style: { flexShrink: '0', minHeight: '52px', width: '52px', borderRadius: '13px', background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(154,100,25,0.3)', color: '#9A6419', fontSize: '20px', fontWeight: '700' } }, '+')
     )
   );
 
@@ -2424,7 +2583,7 @@ function renderInPatient(now) {
   return [card, history];
 }
 
-const SYMPTOM_COLORS = { nausea: '#9A6419', vomiting: '#C0453B', diarrhea: '#C0453B', constipation: '#8E5FA8' };
+const SYMPTOM_COLORS = { nausea: '#9A6419', vomiting: '#C0453B', fatigue: '#8A6479', mouth_sores: '#C0453B', neuropathy: '#8E5FA8', headache: '#AA5375', dizziness: '#8E5FA8', skin_reaction: '#C77800', diarrhea: '#C0453B', constipation: '#8E5FA8' };
 
 function symptomRow(e) {
   const color = SYMPTOM_COLORS[e.symptomType] || '#AA5375';
@@ -2452,7 +2611,7 @@ function renderSymptoms(now) {
   const header = h('section', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' } },
     h('div', null,
       h('div', { style: { fontSize: '19px', fontWeight: '800', letterSpacing: '-0.02em', color: '#342530' } }, 'Symptoms & Reactions'),
-      h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px', lineHeight: '1.4' } }, 'Nausea, vomiting, or other reactions noticed during or after treatment — for bowel changes, use the Bowel Movement tracker on Home')
+      h('div', { style: { fontSize: '12.5px', color: '#7D6974', marginTop: '3px', lineHeight: '1.4' } }, 'Nausea, fatigue, mouth sores, and other reactions noticed during or after treatment — for bowel changes, use the Bowel Movement tracker on Home')
     ),
     h('button', { onClick: () => openSymptomModal(null), style: { flexShrink: '0', minHeight: '44px', width: '44px', borderRadius: '13px', background: '#AA5375', color: '#fff', fontSize: '22px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'inset 0 -2px 0 rgba(150,60,90,0.35)' } }, '+')
   );
@@ -2790,7 +2949,7 @@ subscribePush();
 
 // Init
 unsubPrefs = subscribePrefs((prefs) => {
-  setState({ missedClearedAt: prefs.missedClearedAt || 0 });
+  setState({ missedClearedAt: prefs.missedClearedAt || 0, dismissedMisses: prefs.dismissedMisses || [] });
 });
 unsub = subscribeEntries((entries) => {
   const wasEmpty = state.entries.length === 0 && !state.loaded;
