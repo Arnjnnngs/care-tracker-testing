@@ -18,7 +18,7 @@
 > without prior knowledge. See `TESTING_CLAUDE.md` first for the non-negotiable rules.
 >
 > **Last updated:** July 23, 2026
-> **Current version:** v68 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
+> **Current version:** v69 (testing) (see TESTING_README.md's versioning convention — this repo's version is always
 > "current live prod version + 1" while testing is ahead)
 >
 > **Zofran chemo-block is a 3-day block — chemo day plus the 2 days after** (e.g. chemo Thursday ->
